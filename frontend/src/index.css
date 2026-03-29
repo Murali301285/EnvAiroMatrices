@@ -1,0 +1,49 @@
+@import "tailwindcss";
+@import "react-toastify/dist/ReactToastify.css";
+
+:root {
+  --primary: #f8fafc;
+  --secondary: #ffffff;
+  --text: #0f172a;
+}
+
+body {
+  background-color: var(--primary);
+  color: var(--text);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  margin: 0;
+  display: flex;
+  min-height: 100vh;
+  width: 100vw;
+}
+
+#root {
+  width: 100%;
+}
+
+/* Custom Webkit Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: transparent; /* Changed to transparent by default */
+  border-radius: 4px;
+}
+
+/* Only show scrollbars when hovering over their parent containers */
+.overflow-auto:hover::-webkit-scrollbar-thumb,
+.overflow-y-auto:hover::-webkit-scrollbar-thumb,
+.overflow-x-auto:hover::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+}
+
+/* Darken scrollbar slightly when actively interacting/hovering over it */
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8 !important;
+}
