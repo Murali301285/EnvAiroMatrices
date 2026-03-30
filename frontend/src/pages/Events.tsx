@@ -11,7 +11,7 @@ export default function Events() {
 
     const fetchEvents = (dateParam?: string) => {
         setLoading(true);
-        const url = `http://97.74.92.23:8381/admin/logs/events${dateParam ? `?date=${dateParam}` : ''}`;
+        const url = `http://localhost:8381/admin/logs/events${dateParam ? `?date=${dateParam}` : ''}`;
 
         axios.get(url)
             .then(res => {

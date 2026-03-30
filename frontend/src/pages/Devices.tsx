@@ -30,8 +30,8 @@ export default function Devices() {
         setLoading(true);
         try {
             const [custRes, devRes] = await Promise.all([
-                axios.get('http://97.74.92.23:8381/admin/customers'),
-                axios.get('http://97.74.92.23:8381/admin/devices')
+                axios.get('http://localhost:8381/admin/customers'),
+                axios.get('http://localhost:8381/admin/devices')
             ]);
 
             if (custRes.data?.status === 'success') setCustomers(custRes.data.data || []);
@@ -53,8 +53,8 @@ export default function Devices() {
             return;
         }
 
-        if (!formDeviceId.trim() || formDeviceId.length > 16) {
-            toast.error("Device ID is required and must be max 16 chars!");
+        if (formDeviceId.length < 5 || formDeviceId.length > 20) {
+            toast.error("Device ID must be between 5 and 20 characters");
             return;
         }
 
@@ -76,8 +76,8 @@ export default function Devices() {
         };
 
         const req = editingId
-            ? axios.put(`http://97.74.92.23:8381/admin/devices/${editingId}`, payload)
-            : axios.post('http://97.74.92.23:8381/admin/devices', payload);
+            ? axios.put(`http://localhost:8381/admin/devices/${editingId}`, payload)
+            : axios.post('http://localhost:8381/admin/devices', payload);
 
         req.then(res => {
             if (res.data.status === 'success') {
@@ -116,7 +116,7 @@ export default function Devices() {
     const handleDelete = (slno: number) => {
         if (!window.confirm("Are you sure you want to delete this device endpoint?")) return;
         setLoading(true);
-        axios.delete(`http://97.74.92.23:8381/admin/devices/${slno}`)
+        axios.delete(`http://localhost:8381/admin/devices/${slno}`)
             .then(res => {
                 if (res.data.status === 'success') {
                     toast.success("Device removed successfully!");
@@ -281,8 +281,8 @@ export default function Devices() {
                                     />
                                 </div>
                                 <div>
-                                    <label className="block text-sm font-medium text-slate-700 mb-1">Device ID (Max 16) *</label>
-                                    <input value={formDeviceId} onChange={e => setFormDeviceId(e.target.value)} maxLength={16} type="text" className="w-full px-3 py-[9px] border border-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm font-mono uppercase tracking-widest" placeholder="HW-0001" />
+                                    <label className="block text-sm font-medium text-slate-700 mb-1">Device ID (5-20 chars) *</label>
+                                    <input value={formDeviceId} onChange={e => setFormDeviceId(e.target.value.toUpperCase())} maxLength={20} type="text" className="w-full px-3 py-[9px] border border-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm font-mono uppercase tracking-widest" placeholder="HW-0001" />
                                 </div>
                             </div>
 

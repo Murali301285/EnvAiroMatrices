@@ -46,7 +46,7 @@ export default function Dashboard({ latestData }: { latestData: string }) {
 
     // Initial Load Devices
     useEffect(() => {
-        axios.get('http://97.74.92.23:8381/api/dashboard/devices')
+        axios.get('http://localhost:8381/api/dashboard/devices')
             .then(res => {
                 if (res.data?.data) {
                     setAllDevices(res.data.data);
@@ -71,7 +71,7 @@ export default function Dashboard({ latestData }: { latestData: string }) {
         setVisibleParams({});
         setDataList([]);
         if (selectedDevice?.value) {
-            axios.get(`http://97.74.92.23:8381/api/dashboard/devices/${selectedDevice.value}/params`)
+            axios.get(`http://localhost:8381/api/dashboard/devices/${selectedDevice.value}/params`)
                 .then(res => {
                     if (res.data?.status === 'success') {
                         const params = res.data.data || [];
@@ -97,6 +97,19 @@ export default function Dashboard({ latestData }: { latestData: string }) {
         .filter(d => !selectedCompany || d.customer_code === selectedCompany.value)
         .map(d => ({ value: d.deviceid, label: `${d.deviceid} - ${d.alias || 'Unknown'}` }));
 
+    // Auto-Select Logic (If only 1 option available, seamlessly mount it automatically)
+    useEffect(() => {
+        if (companyOptions.length === 1 && !selectedCompany) {
+            setSelectedCompany(companyOptions[0]);
+        }
+    }, [allDevices, selectedCompany]);
+
+    useEffect(() => {
+        if (filteredDeviceOptions.length === 1 && !selectedDevice) {
+            setSelectedDevice(filteredDeviceOptions[0]);
+        }
+    }, [allDevices, selectedCompany, selectedDevice]);
+
     const parseRevText = (text: string) => {
         if (!text) return {};
         const parts = text.split(',');
@@ -110,7 +123,7 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                 if (k === 'DT') {
                     obj[k] = v;
                 } else {
-                    obj[k] = isNaN(Number(v)) ? v : Number(v);
+                    obj[k.toUpperCase()] = isNaN(Number(v)) ? v : Number(v);
                 }
             }
         });
@@ -121,7 +134,7 @@ export default function Dashboard({ latestData }: { latestData: string }) {
         if (!selectedDevice?.value) return;
         setLoading(true);
 
-        let url = `http://97.74.92.23:8381/api/dashboard/telemetry?limit=${limit}&device_id=${encodeURIComponent(selectedDevice.value)}`;
+        let url = `http://localhost:8381/api/dashboard/telemetry?limit=${limit}&device_id=${encodeURIComponent(selectedDevice.value)}`;
         if (fromDate) url += `&from_date=${encodeURIComponent(fromDate.replace('T', ' ') + ':00')}`;
         if (toDate) url += `&to_date=${encodeURIComponent(toDate.replace('T', ' ') + ':59')}`;
 
@@ -149,8 +162,10 @@ export default function Dashboard({ latestData }: { latestData: string }) {
 
                         // Dynamically map values based on Device Parameters!
                         deviceParams.forEach(dp => {
-                            // Extract numeric values from payload tag dynamically
-                            baseObj[dp.parametername] = p[dp.api_rev_tag] || 0;
+                            // Extract numeric values from payload tag dynamically (case insensitive)
+                            const upperTag = (dp.api_rev_tag || '').toUpperCase();
+                            const val = p[upperTag];
+                            baseObj[dp.parametername] = val !== undefined ? val : 0;
                         });
 
                         return baseObj;
@@ -380,7 +395,7 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                 <div className="flex items-center justify-between mb-6">
                     <h3 className="text-xl font-bold text-indigo-600 flex items-center gap-2">
                         <span className="w-1.5 h-6 bg-indigo-500 rounded-full"></span>
-                        Device Telemetry Canvas
+                        Dashboard
                     </h3>
                     <div className="flex items-center gap-3">
                         <button onClick={() => handleDownloadChart(aqiRef, 'Telemetry_Dashboard.png')} className="bg-indigo-50 hover:bg-indigo-100 text-indigo-600 font-semibold px-4 py-2 rounded-lg text-sm flex items-center gap-2 transition-colors">

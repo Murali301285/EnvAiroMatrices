@@ -3,7 +3,7 @@ module.exports = {
     {
       name: "envmat-backend",
       cwd: "./backend",
-      script: "python",
+      script: "./venv/Scripts/pythonw.exe",
       args: "main.py",
       instances: 1,
       autorestart: true,
@@ -15,14 +15,12 @@ module.exports = {
     },
     {
       name: "envmat-frontend",
-      cwd: "./frontend",
-      script: "npx",
-      args: "serve -s dist -l 8380",
-      instances: 1,
-      autorestart: true,
-      watch: false,
-      max_memory_restart: '1G',
+      script: "serve",
       env: {
+        PM2_SERVE_PATH: './frontend/dist',
+        PM2_SERVE_PORT: 8380,
+        PM2_SERVE_SPA: 'true',
+        PM2_SERVE_HOMEPAGE: '/index.html',
         NODE_ENV: "production"
       }
     }

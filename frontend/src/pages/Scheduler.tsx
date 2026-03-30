@@ -32,8 +32,8 @@ export default function Scheduler() {
         setLoading(true);
         try {
             const [devRes, schRes] = await Promise.all([
-                axios.get('http://97.74.92.23:8381/admin/devices'),
-                axios.get('http://97.74.92.23:8381/admin/schedulers')
+                axios.get('http://localhost:8381/admin/devices'),
+                axios.get('http://localhost:8381/admin/schedulers')
             ]);
 
             if (devRes.data?.status === 'success') setDevices(devRes.data.data || []);
@@ -74,8 +74,8 @@ export default function Scheduler() {
         };
 
         const req = editingId
-            ? axios.put(`http://97.74.92.23:8381/admin/schedulers/${editingId}`, payload)
-            : axios.post('http://97.74.92.23:8381/admin/schedulers', payload);
+            ? axios.put(`http://localhost:8381/admin/schedulers/${editingId}`, payload)
+            : axios.post('http://localhost:8381/admin/schedulers', payload);
 
         req.then(res => {
             if (res.data.status === 'success') {
@@ -106,7 +106,7 @@ export default function Scheduler() {
     const handleDelete = (slno: number) => {
         if (!window.confirm("Are you sure you want to drop this job scheduler target?")) return;
         setLoading(true);
-        axios.delete(`http://97.74.92.23:8381/admin/schedulers/${slno}`)
+        axios.delete(`http://localhost:8381/admin/schedulers/${slno}`)
             .then(res => {
                 if (res.data.status === 'success') {
                     toast.success("Job Scheduler completely dropped.");

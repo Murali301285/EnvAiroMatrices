@@ -112,6 +112,161 @@ def process_dlq():
         if conn:
             conn.close()
 
+def aggregate_minute_data():
+    """
+    Minutes Aggregation Engine: Summarizes IoT data mathematically.
+    """
+    print("Running Minute Data Aggregator...")
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            # 1. Fetch unaggregated rows
+            cursor.execute("SELECT slno, deviceid, revtext, receivedon FROM tblDatareceiver WHERE isAggregated=0 ORDER BY receivedon ASC LIMIT 500")
+            unaggregated = cursor.fetchall()
+            
+            if not unaggregated:
+                return
+
+            from collections import defaultdict
+            import json
+            
+            # grouped_data[dev_id][minute_block_datetime] = list of tuples (slno, parsed_dict)
+            grouped_data = defaultdict(lambda: defaultdict(list))
+            
+            for row in unaggregated:
+                slno = row.get('slno')
+                dev_id = row.get('deviceid')
+                raw_text = row.get('revtext') or row.get('revText')
+                rec_on = row.get('receivedon') or row.get('receivedOn')
+                
+                if not rec_on:
+                    continue
+                
+                # Floor datetime to strict minute block
+                minute_block = rec_on.replace(second=0, microsecond=0)
+                
+                # Parse "DT:17:57:27,IN:1394,OUT:1352..."
+                parsed = {}
+                if raw_text:
+                    for part in raw_text.split(','):
+                        if ':' in part:
+                            # Split on first colon only
+                            parts = part.split(':', 1)
+                            if len(parts) == 2:
+                                k = parts[0].strip().upper() # Case Insensitive
+                                v = parts[1].strip()
+                                try:
+                                    parsed[k] = float(v)
+                                except ValueError:
+                                    parsed[k] = v
+                                
+                grouped_data[dev_id][minute_block].append((slno, parsed))
+
+            # Mathematical Aggregation logic
+            for dev_id, blocks in grouped_data.items():
+                cursor.execute("""
+                    SELECT m.api_rev_tag, p.valueFactor, p.datatype, p.decimalplaces
+                    FROM tblDeviceParameterMapping m 
+                    JOIN tblParameterMaster p ON m.parameter_id = p.slno 
+                    WHERE m.deviceid = %s AND m.isDeleted = 0 AND p.status = 1
+                """, (dev_id,))
+                
+                mappings = cursor.fetchall()
+                
+                for minute_block, records in blocks.items():
+                    minute_metrics = {}
+                    
+                    if mappings:
+                        for mapping in mappings:
+                            tag_raw = mapping.get('api_rev_tag')
+                            if not tag_raw:
+                                continue
+                            
+                            tag = tag_raw.upper() # Case Insensitive Mapping
+                            v_factor = (mapping.get('valuefactor') or mapping.get('valueFactor') or 'Avg').upper()
+                            
+                            # Gather all values for this tag
+                            values = []
+                            for r in records:
+                                payload = r[1]
+                                if tag in payload:
+                                    values.append(payload[tag])
+                                    
+                            if not values:
+                                continue
+                                
+                            metric_val = None
+                            # Separate numerics for mathematical safety
+                            numeric_vals = [v for v in values if isinstance(v, (int, float))]
+                            
+                            if v_factor in ['AVG', 'SUM']:
+                                if numeric_vals:
+                                    if v_factor == 'AVG':
+                                        metric_val = round(sum(numeric_vals) / len(numeric_vals), 2)
+                                    else: # SUM is differential
+                                        metric_val = round(max(numeric_vals) - min(numeric_vals), 2)
+                            elif v_factor == 'MAX':
+                                metric_val = max(numeric_vals) if numeric_vals else max(values)
+                            elif v_factor == 'MIN':
+                                metric_val = min(numeric_vals) if numeric_vals else min(values)
+                            elif v_factor == 'FIRST':
+                                metric_val = values[0]
+                            elif v_factor == 'LAST':
+                                metric_val = values[-1]
+                            else: # Default Fallback to Avg
+                                if numeric_vals:
+                                    metric_val = round(sum(numeric_vals) / len(numeric_vals), 2)
+                                else:
+                                    metric_val = values[-1] # fallback to text value
+                                    
+                            if metric_val is not None:
+                                data_type = mapping.get('datatype') or 'Decimal'
+                                dec_places = mapping.get('decimalplaces')
+                                if dec_places is None:
+                                    dec_places = 2
+                                    
+                                if data_type == 'Number':
+                                    try:
+                                        metric_val = int(round(float(metric_val)))
+                                    except ValueError:
+                                        pass
+                                elif data_type == 'Decimal':
+                                    try:
+                                        metric_val = round(float(metric_val), dec_places)
+                                    except ValueError:
+                                        pass
+                                elif data_type == 'Text':
+                                    metric_val = str(metric_val)
+
+                                minute_metrics[tag_raw] = metric_val
+                    
+                    if minute_metrics:
+                        # Insert into tblMinuteDetails
+                        cursor.execute("""
+                            INSERT INTO tblMinuteDetails (deviceid, minute_date, minute_time, metrics) 
+                            VALUES (%s, %s, %s, %s)
+                        """, (
+                            dev_id, 
+                            minute_block.date(), 
+                            minute_block.time(), 
+                            json.dumps(minute_metrics)
+                        ))
+
+                    # Finally, update these particular records to isAggregated=1
+                    slnos = [r[0] for r in records]
+                    if slnos:
+                        format_strings = ','.join(['%s'] * len(slnos))
+                        cursor.execute(f"UPDATE tblDatareceiver SET isAggregated=1, aggregatedOn=NOW() WHERE slno IN ({format_strings})", tuple(slnos))
+
+            conn.commit()
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"Minute Aggregator Error: {e}")
+    finally:
+        if conn:
+            conn.close()
+
 def db_cleanup_job():
     print("Running db_cleanup_job...")
     conn = get_db_connection()
@@ -155,6 +310,7 @@ def disk_cleanup_job():
 def start_schedulers():
     scheduler = BackgroundScheduler()
     scheduler.add_job(orchestrate_json_payloads, 'interval', minutes=1)
+    scheduler.add_job(aggregate_minute_data, 'interval', minutes=1)
     scheduler.add_job(process_dlq, 'interval', minutes=2)
     scheduler.add_job(db_cleanup_job, 'cron', hour=0, minute=0)
     scheduler.add_job(disk_cleanup_job, 'cron', hour=0, minute=5) # Runs slightly after DB cleanup

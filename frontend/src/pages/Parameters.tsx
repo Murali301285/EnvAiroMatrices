@@ -20,12 +20,15 @@ export default function Parameters() {
     const [formColor, setFormColor] = useState("#38bdf8");
     const [formUnit, setFormUnit] = useState("");
     const [formConversion, setFormConversion] = useState("NA");
+    const [formValueFactor, setFormValueFactor] = useState("Avg");
     const [formInputValue, setFormInputValue] = useState("");
     const [formStatus, setFormStatus] = useState(true); // 1 for true, 0 for false
+    const [formDataType, setFormDataType] = useState("Decimal");
+    const [formDecimalPlaces, setFormDecimalPlaces] = useState<number>(2);
 
     const fetchParameters = () => {
         setLoading(true);
-        axios.get('http://97.74.92.23:8381/admin/parameters')
+        axios.get('http://localhost:8381/admin/parameters')
             .then(res => {
                 if (res.data?.status === 'success') {
                     setParameters(res.data.data || []);
@@ -65,13 +68,16 @@ export default function Parameters() {
             color: formColor,
             unit: formUnit,
             conversionFactor: formConversion,
+            valueFactor: formValueFactor,
             inputField: formConversion === "NA" ? null : formInputValue,
-            status: formStatus ? 1 : 0
+            status: formStatus ? 1 : 0,
+            datatype: formDataType,
+            decimalplaces: formDataType === 'Decimal' ? formDecimalPlaces : null
         };
 
         const req = editingId
-            ? axios.put(`http://97.74.92.23:8381/admin/parameters/${editingId}`, payload)
-            : axios.post('http://97.74.92.23:8381/admin/parameters', payload);
+            ? axios.put(`http://localhost:8381/admin/parameters/${editingId}`, payload)
+            : axios.post('http://localhost:8381/admin/parameters', payload);
 
         req.then(res => {
             if (res.data.status === 'success') {
@@ -92,8 +98,11 @@ export default function Parameters() {
         setFormColor(row.color || "#38bdf8");
         setFormUnit(row.unit || "");
         setFormConversion(row.conversionfactor || "NA");
+        setFormValueFactor(row.valuefactor || "Avg");
         setFormInputValue(row.inputfield || "");
         setFormStatus(row.status === 1);
+        setFormDataType(row.datatype || "Decimal");
+        setFormDecimalPlaces(row.decimalplaces !== null ? row.decimalplaces : 2);
         setEditingId(row.slno);
         setIsAddModalOpen(true);
     };
@@ -101,7 +110,7 @@ export default function Parameters() {
     const handleDelete = (slno: number) => {
         if (!window.confirm("Are you sure you want to delete this parameter?")) return;
         setLoading(true);
-        axios.delete(`http://97.74.92.23:8381/admin/parameters/${slno}`)
+        axios.delete(`http://localhost:8381/admin/parameters/${slno}`)
             .then(res => {
                 if (res.data.status === 'success') {
                     toast.success("Parameter removed successfully!");
@@ -119,8 +128,9 @@ export default function Parameters() {
         setEditingId(null);
         setFormName(""); setFormTag(""); setFormLabel("");
         setFormColor("#38bdf8"); setFormUnit("");
-        setFormConversion("NA"); setFormInputValue("");
+        setFormConversion("NA"); setFormValueFactor("Avg"); setFormInputValue("");
         setFormStatus(true);
+        setFormDataType("Decimal"); setFormDecimalPlaces(2);
     };
 
     const columns = useMemo<ColumnDef<any, any>[]>(() => [
@@ -147,6 +157,34 @@ export default function Parameters() {
                     {info.row.original.unit && <span className="ml-1 text-slate-400 text-xs">({info.row.original.unit})</span>}
                 </>
             )
+        },
+        {
+            accessorKey: 'valuefactor',
+            header: 'Rule',
+            cell: info => {
+                const val = info.getValue() || 'Avg';
+                let colors = "bg-indigo-50 text-indigo-600 border-indigo-100";
+                if (val === "Sum") colors = "bg-sky-50 text-sky-600 border-sky-100";
+                if (val === "Max") colors = "bg-rose-50 text-rose-600 border-rose-100";
+                if (val === "Min") colors = "bg-amber-50 text-amber-600 border-amber-100";
+                if (val === "First") colors = "bg-emerald-50 text-emerald-600 border-emerald-100";
+                if (val === "Last") colors = "bg-purple-50 text-purple-600 border-purple-100";
+                
+                return <span className={`text-xs font-bold px-2 py-0.5 rounded border ${colors}`}>{val}</span>;
+            }
+        },
+        {
+            accessorKey: 'datatype',
+            header: 'Format',
+            cell: info => {
+                const type = info.getValue() || 'Decimal';
+                const dec = info.row.original.decimalplaces;
+                return (
+                    <span className="text-xs font-semibold text-slate-600 bg-slate-100 px-2 py-1 rounded border border-slate-200 shadow-sm tracking-wide">
+                        {type}{type === 'Decimal' && dec !== null && ` (${dec})`}
+                    </span>
+                );
+            }
         },
         {
             accessorKey: 'conversionfactor',
@@ -261,7 +299,18 @@ export default function Parameters() {
 
                             <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl space-y-4">
                                 <h4 className="text-sm font-bold text-slate-700">Calculations & Status</h4>
-                                <div className="grid grid-cols-2 gap-4">
+                                <div className="grid grid-cols-3 gap-4">
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-700 mb-1">Value Factor</label>
+                                        <select value={formValueFactor} onChange={e => setFormValueFactor(e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm bg-white">
+                                            <option value="Sum">Sum</option>
+                                            <option value="Max">Max</option>
+                                            <option value="Min">Min</option>
+                                            <option value="Avg">Avg</option>
+                                            <option value="First">First</option>
+                                            <option value="Last">Last</option>
+                                        </select>
+                                    </div>
                                     <div>
                                         <label className="block text-sm font-medium text-slate-700 mb-1">Conversion Factor</label>
                                         <select value={formConversion} onChange={e => setFormConversion(e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm bg-white">
@@ -284,7 +333,25 @@ export default function Parameters() {
                                         />
                                     </div>
                                 </div>
-                                <div className="flex items-center justify-between pt-2">
+                                <div className="grid grid-cols-2 gap-4 mt-2">
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-700 mb-1">Data Type</label>
+                                        <select value={formDataType} onChange={e => setFormDataType(e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm bg-white">
+                                            <option value="Number">Number</option>
+                                            <option value="Decimal">Decimal</option>
+                                            <option value="Text">Text</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className={`block text-sm font-medium text-slate-700 mb-1 transition-opacity ${formDataType === 'Decimal' ? 'opacity-100' : 'opacity-40'}`}>Decimal Places</label>
+                                        <select disabled={formDataType !== 'Decimal'} value={formDecimalPlaces} onChange={e => setFormDecimalPlaces(Number(e.target.value))} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm bg-white disabled:bg-slate-100 disabled:text-slate-400">
+                                            {[0, 1, 2, 3, 4].map(n => (
+                                                <option key={n} value={n}>{n}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+                                <div className="flex items-center justify-between pt-2 border-t border-slate-200/60 mt-2">
                                     <span className="text-sm font-medium text-slate-700">Active Status</span>
                                     <button
                                         onClick={() => setFormStatus(!formStatus)}

@@ -24,7 +24,7 @@ export default function Customers() {
 
     const fetchCustomers = () => {
         setLoading(true);
-        axios.get('http://97.74.92.23:8381/admin/customers')
+        axios.get('http://localhost:8381/admin/customers')
             .then(res => {
                 if (res.data?.status === 'success') {
                     setCustomers(res.data.data || []);
@@ -74,8 +74,8 @@ export default function Customers() {
         };
 
         const req = editingId
-            ? axios.put(`http://97.74.92.23:8381/admin/customers/${editingId}`, payload)
-            : axios.post('http://97.74.92.23:8381/admin/customers', payload);
+            ? axios.put(`http://localhost:8381/admin/customers/${editingId}`, payload)
+            : axios.post('http://localhost:8381/admin/customers', payload);
 
         req.then(res => {
             if (res.data.status === 'success') {
@@ -104,7 +104,7 @@ export default function Customers() {
     const handleDelete = (slno: number) => {
         if (!window.confirm("Are you sure you want to delete this customer?")) return;
         setLoading(true);
-        axios.delete(`http://97.74.92.23:8381/admin/customers/${slno}`)
+        axios.delete(`http://localhost:8381/admin/customers/${slno}`)
             .then(res => {
                 if (res.data.status === 'success') {
                     toast.success("Customer removed successfully!");

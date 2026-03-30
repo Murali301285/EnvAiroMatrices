@@ -21,9 +21,9 @@ export default function ParamMapping() {
         setLoading(true);
         try {
             const [devRes, paramRes, mapRes] = await Promise.all([
-                axios.get('http://97.74.92.23:8381/admin/devices'),
-                axios.get('http://97.74.92.23:8381/admin/parameters'),
-                axios.get('http://97.74.92.23:8381/admin/param-mapping')
+                axios.get('http://localhost:8381/admin/devices'),
+                axios.get('http://localhost:8381/admin/parameters'),
+                axios.get('http://localhost:8381/admin/param-mapping')
             ]);
 
             if (devRes.data?.status === 'success') setDevices(devRes.data.data || []);
@@ -78,7 +78,7 @@ export default function ParamMapping() {
                 api_rev_tag: val.trim()
             }));
 
-        axios.post('http://97.74.92.23:8381/admin/param-mapping-bulk', {
+        axios.post('http://localhost:8381/admin/param-mapping-bulk', {
             deviceid: selectedDevice,
             mappings: mappingsPayload
         }).then(res => {

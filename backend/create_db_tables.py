@@ -26,7 +26,7 @@ commands = (
     """
     CREATE TABLE IF NOT EXISTS tblDeviceParameterMapping (
         slno SERIAL PRIMARY KEY,
-        deviceid VARCHAR(16) NOT NULL,
+        deviceid VARCHAR(20) NOT NULL,
         parameter_id INT NOT NULL,
         api_rev_tag VARCHAR(255),
         isDeleted INT DEFAULT 0
@@ -35,7 +35,7 @@ commands = (
     """
     CREATE TABLE IF NOT EXISTS tblDeviceJsonMapping (
         slno SERIAL PRIMARY KEY,
-        deviceid VARCHAR(16) NOT NULL,
+        deviceid VARCHAR(20) NOT NULL,
         scheduled_json_id INT,
         alert_json_id INT,
         resolved_json_id INT,
@@ -45,7 +45,7 @@ commands = (
     """
     CREATE TABLE IF NOT EXISTS tblScheduler (
         slno SERIAL PRIMARY KEY,
-        deviceid VARCHAR(16) NOT NULL,
+        deviceid VARCHAR(20) NOT NULL,
         frequency INT NOT NULL,
         starting_time TIME,
         create_local_json BOOLEAN DEFAULT FALSE,
@@ -55,6 +55,16 @@ commands = (
         is_staging BOOLEAN DEFAULT FALSE,
         post_url_live VARCHAR(255),
         isDeleted INT DEFAULT 0
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS tblMinuteDetails (
+        slno SERIAL PRIMARY KEY,
+        deviceid VARCHAR(50) NOT NULL,
+        minute_date DATE NOT NULL,
+        minute_time TIME NOT NULL,
+        metrics JSONB NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """
 )

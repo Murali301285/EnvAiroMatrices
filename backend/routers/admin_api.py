@@ -80,13 +80,13 @@ async def add_customer(request: Request):
 # ----- PARAMETERS -----
 @router.get("/parameters")
 def get_params():
-    return execute_query("SELECT slno, parameterName, param_tag, labelName, color, unit, conversionFactor, inputField, status FROM tblParameterMaster WHERE isDeleted=0")
+    return execute_query("SELECT slno, parameterName, param_tag, labelName, color, unit, conversionFactor, valueFactor, inputField, status, datatype, decimalplaces FROM tblParameterMaster WHERE isDeleted=0")
 
 @router.post("/parameters")
 async def add_param(request: Request):
     p = await request.json()
-    sql = "INSERT INTO tblParameterMaster (parameterName, param_tag, labelName, color, unit, conversionFactor, inputField, status) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING slno"
-    return execute_query(sql, (p.get('parameterName'), p.get('param_tag'), p.get('labelName'), p.get('color'), p.get('unit'), p.get('conversionFactor'), p.get('inputField'), p.get('status', 1)), False)
+    sql = "INSERT INTO tblParameterMaster (parameterName, param_tag, labelName, color, unit, conversionFactor, valueFactor, inputField, status, datatype, decimalplaces) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING slno"
+    return execute_query(sql, (p.get('parameterName'), p.get('param_tag'), p.get('labelName'), p.get('color'), p.get('unit'), p.get('conversionFactor'), p.get('valueFactor', 'Avg'), p.get('inputField'), p.get('status', 1), p.get('datatype', 'Decimal'), p.get('decimalplaces')), False)
 
 # ----- DEVICES -----
 @router.get("/devices")
@@ -223,7 +223,7 @@ async def update_entity(entity: str, slno: int, request: Request):
         details = json.dumps(p.get('details', {}))
         return execute_query("UPDATE tblCustomerMaster SET customerName=%s, customer_code=%s, details=%s WHERE slno=%s", (p.get('customerName'), p.get('customer_code'), details, slno), False)
     elif entity == "parameters":
-        return execute_query("UPDATE tblParameterMaster SET parameterName=%s, param_tag=%s, labelName=%s, color=%s, unit=%s, conversionFactor=%s, inputField=%s, status=%s WHERE slno=%s", (p.get('parameterName'), p.get('param_tag'), p.get('labelName'), p.get('color'), p.get('unit'), p.get('conversionFactor'), p.get('inputField'), p.get('status', 1), slno), False)
+        return execute_query("UPDATE tblParameterMaster SET parameterName=%s, param_tag=%s, labelName=%s, color=%s, unit=%s, conversionFactor=%s, valueFactor=%s, inputField=%s, status=%s, datatype=%s, decimalplaces=%s WHERE slno=%s", (p.get('parameterName'), p.get('param_tag'), p.get('labelName'), p.get('color'), p.get('unit'), p.get('conversionFactor'), p.get('valueFactor', 'Avg'), p.get('inputField'), p.get('status', 1), p.get('datatype', 'Decimal'), p.get('decimalplaces'), slno), False)
     elif entity == "devices":
         whj = json.dumps(p.get('working_hours_json', {}))
         return execute_query("UPDATE tblDeviceMaster SET customer_code=%s, deviceid=%s, alias=%s, location=%s, address=%s, working_hours_json=%s, active=%s, remarks=%s WHERE slno=%s", (p.get('customer_code'), p.get('deviceid'), p.get('alias'), p.get('location'), p.get('address'), whj, p.get('active', 1), p.get('remarks'), slno), False)

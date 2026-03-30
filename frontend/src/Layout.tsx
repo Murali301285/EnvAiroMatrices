@@ -84,11 +84,11 @@ export default function Layout({ }: { wsStatus?: string }) {
                 { name: 'Customers', path: '/customers', icon: <Users size={18} /> },
                 { name: 'Parameters', path: '/parameters', icon: <Settings size={18} /> },
                 { name: 'Devices', path: '/devices', icon: <HardDrive size={18} /> },
-                { name: 'Users', path: '/users', icon: <Shield size={18} /> },
                 { name: 'Param Mapping', path: '/param-mapping', icon: <Code size={18} /> },
                 { name: 'JSON Formatter', path: '/formatters', icon: <FileJson size={18} /> },
                 { name: 'JSON Mapping', path: '/json-mapping', icon: <List size={18} /> },
                 { name: 'Scheduler', path: '/scheduler', icon: <Calendar size={18} /> },
+                { name: 'Users', path: '/users', icon: <Shield size={18} /> },
             ]
         },
         {
