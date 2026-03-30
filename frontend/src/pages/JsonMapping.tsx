@@ -21,9 +21,9 @@ export default function JsonMapping() {
         setLoading(true);
         try {
             const [devRes, fmtRes, mapRes] = await Promise.all([
-                axios.get('http://localhost:8000/admin/devices'),
-                axios.get('http://localhost:8000/admin/formatters'),
-                axios.get('http://localhost:8000/admin/json-mapping')
+                axios.get('http://97.74.92.23:8381/admin/devices'),
+                axios.get('http://97.74.92.23:8381/admin/formatters'),
+                axios.get('http://97.74.92.23:8381/admin/json-mapping')
             ]);
 
             if (devRes.data?.status === 'success') setDevices(devRes.data.data || []);
@@ -63,7 +63,7 @@ export default function JsonMapping() {
         }
 
         setSaving(true);
-        axios.post('http://localhost:8000/admin/json-mapping', {
+        axios.post('http://97.74.92.23:8381/admin/json-mapping', {
             deviceid: selectedDevice,
             scheduled_json_id: scheduledId ? parseInt(scheduledId) : null,
             alert_json_id: alertId ? parseInt(alertId) : null,

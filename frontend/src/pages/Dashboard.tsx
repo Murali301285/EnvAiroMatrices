@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import {
-    LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine
+    LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
 } from 'recharts';
 import * as XLSX from 'xlsx';
 import html2canvas from 'html2canvas';
@@ -42,12 +42,11 @@ export default function Dashboard({ latestData }: { latestData: string }) {
     const [isFilterOpen, setIsFilterOpen] = useState(true);
     const [isChartFullscreen, setIsChartFullscreen] = useState(false);
 
-    const aqiRef = useRef<HTMLDivElement>(null);
-    const odourRef = useRef<HTMLDivElement>(null);
+    const aqiRef = useRef<any>(null);
 
     // Initial Load Devices
     useEffect(() => {
-        axios.get('http://localhost:8000/api/dashboard/devices')
+        axios.get('http://97.74.92.23:8381/api/dashboard/devices')
             .then(res => {
                 if (res.data?.data) {
                     setAllDevices(res.data.data);
@@ -72,7 +71,7 @@ export default function Dashboard({ latestData }: { latestData: string }) {
         setVisibleParams({});
         setDataList([]);
         if (selectedDevice?.value) {
-            axios.get(`http://localhost:8000/api/dashboard/devices/${selectedDevice.value}/params`)
+            axios.get(`http://97.74.92.23:8381/api/dashboard/devices/${selectedDevice.value}/params`)
                 .then(res => {
                     if (res.data?.status === 'success') {
                         const params = res.data.data || [];
@@ -122,7 +121,7 @@ export default function Dashboard({ latestData }: { latestData: string }) {
         if (!selectedDevice?.value) return;
         setLoading(true);
 
-        let url = `http://localhost:8000/api/dashboard/telemetry?limit=${limit}&device_id=${encodeURIComponent(selectedDevice.value)}`;
+        let url = `http://97.74.92.23:8381/api/dashboard/telemetry?limit=${limit}&device_id=${encodeURIComponent(selectedDevice.value)}`;
         if (fromDate) url += `&from_date=${encodeURIComponent(fromDate.replace('T', ' ') + ':00')}`;
         if (toDate) url += `&to_date=${encodeURIComponent(toDate.replace('T', ' ') + ':59')}`;
 
@@ -131,19 +130,20 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                 if (res.data?.status === 'success') {
                     const raw = res.data.data || [];
                     const processed = raw.map((row: any, idx: number) => {
-                        const p = parseRevText(row.revText);
-                        const dObj = new Date(row.receivedOn);
+                        const revTextStr = row.revText || row.revtext || '';
+                        const p = parseRevText(revTextStr);
+                        const dObj = new Date(row.receivedOn || row.receivedon);
 
                         const baseObj: any = {
                             slno_ui: idx + 1,
-                            receivedOn: row.receivedOn,
-                            DateStr: dObj.toLocaleDateString('en-GB').replace(/\//g, '-'),
-                            TimeStr: p.DT || dObj.toLocaleTimeString(),
-                            DateTimeStr: dObj.toLocaleString(),
-                            DeviceId: row.deviceid,
+                            receivedOn: row.receivedOn || row.receivedon,
+                            DateStr: dObj.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }),
+                            TimeStr: dObj.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }),
+                            DateTimeStr: `${dObj.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })} ${dObj.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}`,
+                            DeviceId: row.deviceid || row.deviceId,
                             DeviceName: row.alias || row.deviceid,
                             Location: row.location || '-',
-                            RawData: row.revText,
+                            RawData: revTextStr,
                             Status: p.STATUS || p.status || 'UNKNOWN'
                         };
 
@@ -168,7 +168,7 @@ export default function Dashboard({ latestData }: { latestData: string }) {
 
     // Auto Refresh Hook
     useEffect(() => {
-        let interval: NodeJS.Timeout;
+        let interval: ReturnType<typeof setInterval>;
         if (autoRefresh) {
             fetchTelemetry();
             interval = setInterval(fetchTelemetry, 120000);

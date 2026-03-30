@@ -17,6 +17,20 @@ def get_top_2000_data():
     finally:
         conn.close()
 
+@router.get("/view")
+def get_view_records():
+    """Returns top 1000 telemetry records from history regardless of deviceid, specifically extracting device, raw text, and timestamp."""
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT deviceid, revText, receivedOn FROM tblDatareceiverHistory ORDER BY receivedOn DESC LIMIT 1000")
+            result = cursor.fetchall()
+            return {"status": "success", "count": len(result), "data": result}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
+        conn.close()
+
 # --- Advanced Dashboard Endpoints ---
 
 @router.get("/dashboard/devices")
@@ -65,7 +79,7 @@ def get_dashboard_telemetry(
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
-            query = "SELECT d.slno, d.deviceid, d.revText, d.receivedOn, m.location, m.alias FROM tblDatareceiver d LEFT JOIN tblDeviceMaster m ON d.deviceid = m.deviceid WHERE 1=1"
+            query = "SELECT d.slno, d.deviceid, d.revText, d.receivedOn, m.location, m.alias FROM tblDatareceiverHistory d LEFT JOIN tblDeviceMaster m ON d.deviceid = m.deviceid WHERE 1=1"
             params = []
             
             if device_id:

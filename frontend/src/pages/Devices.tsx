@@ -30,8 +30,8 @@ export default function Devices() {
         setLoading(true);
         try {
             const [custRes, devRes] = await Promise.all([
-                axios.get('http://localhost:8000/admin/customers'),
-                axios.get('http://localhost:8000/admin/devices')
+                axios.get('http://97.74.92.23:8381/admin/customers'),
+                axios.get('http://97.74.92.23:8381/admin/devices')
             ]);
 
             if (custRes.data?.status === 'success') setCustomers(custRes.data.data || []);
@@ -76,8 +76,8 @@ export default function Devices() {
         };
 
         const req = editingId
-            ? axios.put(`http://localhost:8000/admin/devices/${editingId}`, payload)
-            : axios.post('http://localhost:8000/admin/devices', payload);
+            ? axios.put(`http://97.74.92.23:8381/admin/devices/${editingId}`, payload)
+            : axios.post('http://97.74.92.23:8381/admin/devices', payload);
 
         req.then(res => {
             if (res.data.status === 'success') {
@@ -116,7 +116,7 @@ export default function Devices() {
     const handleDelete = (slno: number) => {
         if (!window.confirm("Are you sure you want to delete this device endpoint?")) return;
         setLoading(true);
-        axios.delete(`http://localhost:8000/admin/devices/${slno}`)
+        axios.delete(`http://97.74.92.23:8381/admin/devices/${slno}`)
             .then(res => {
                 if (res.data.status === 'success') {
                     toast.success("Device removed successfully!");

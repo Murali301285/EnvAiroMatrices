@@ -34,7 +34,7 @@ export default function Layout({ }: { wsStatus?: string }) {
     }, [navigate]);
 
     useEffect(() => {
-        let timeoutId: NodeJS.Timeout;
+        let timeoutId: ReturnType<typeof setTimeout>;
 
         const resetTimer = () => {
             if (timeoutId) clearTimeout(timeoutId);

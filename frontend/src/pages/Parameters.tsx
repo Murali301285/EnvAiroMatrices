@@ -25,7 +25,7 @@ export default function Parameters() {
 
     const fetchParameters = () => {
         setLoading(true);
-        axios.get('http://localhost:8000/admin/parameters')
+        axios.get('http://97.74.92.23:8381/admin/parameters')
             .then(res => {
                 if (res.data?.status === 'success') {
                     setParameters(res.data.data || []);
@@ -70,8 +70,8 @@ export default function Parameters() {
         };
 
         const req = editingId
-            ? axios.put(`http://localhost:8000/admin/parameters/${editingId}`, payload)
-            : axios.post('http://localhost:8000/admin/parameters', payload);
+            ? axios.put(`http://97.74.92.23:8381/admin/parameters/${editingId}`, payload)
+            : axios.post('http://97.74.92.23:8381/admin/parameters', payload);
 
         req.then(res => {
             if (res.data.status === 'success') {
@@ -101,7 +101,7 @@ export default function Parameters() {
     const handleDelete = (slno: number) => {
         if (!window.confirm("Are you sure you want to delete this parameter?")) return;
         setLoading(true);
-        axios.delete(`http://localhost:8000/admin/parameters/${slno}`)
+        axios.delete(`http://97.74.92.23:8381/admin/parameters/${slno}`)
             .then(res => {
                 if (res.data.status === 'success') {
                     toast.success("Parameter removed successfully!");

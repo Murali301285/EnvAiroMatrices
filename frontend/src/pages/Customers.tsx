@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
-import { Users, Plus, AlertCircle, Edit2, Trash2, Check, X } from 'lucide-react';
+import { Users, Plus, AlertCircle, Edit2, Trash2, X } from 'lucide-react';
 import { toast } from '../utils/toast';
 import type { ColumnDef } from '@tanstack/react-table';
 import DataTable from '../components/DataTable';
@@ -24,7 +24,7 @@ export default function Customers() {
 
     const fetchCustomers = () => {
         setLoading(true);
-        axios.get('http://localhost:8000/admin/customers')
+        axios.get('http://97.74.92.23:8381/admin/customers')
             .then(res => {
                 if (res.data?.status === 'success') {
                     setCustomers(res.data.data || []);
@@ -74,8 +74,8 @@ export default function Customers() {
         };
 
         const req = editingId
-            ? axios.put(`http://localhost:8000/admin/customers/${editingId}`, payload)
-            : axios.post('http://localhost:8000/admin/customers', payload);
+            ? axios.put(`http://97.74.92.23:8381/admin/customers/${editingId}`, payload)
+            : axios.post('http://97.74.92.23:8381/admin/customers', payload);
 
         req.then(res => {
             if (res.data.status === 'success') {
@@ -104,7 +104,7 @@ export default function Customers() {
     const handleDelete = (slno: number) => {
         if (!window.confirm("Are you sure you want to delete this customer?")) return;
         setLoading(true);
-        axios.delete(`http://localhost:8000/admin/customers/${slno}`)
+        axios.delete(`http://97.74.92.23:8381/admin/customers/${slno}`)
             .then(res => {
                 if (res.data.status === 'success') {
                     toast.success("Customer removed successfully!");

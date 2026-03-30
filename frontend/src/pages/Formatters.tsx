@@ -31,7 +31,7 @@ export default function Formatters() {
 
     const fetchFormatters = () => {
         setLoading(true);
-        axios.get('http://localhost:8000/admin/formatters')
+        axios.get('http://97.74.92.23:8381/admin/formatters')
             .then(res => {
                 if (res.data?.status === 'success') {
                     setFormatters(res.data.data || []);
@@ -76,8 +76,8 @@ export default function Formatters() {
         };
 
         const req = editingId
-            ? axios.put(`http://localhost:8000/admin/formatters/${editingId}`, payload)
-            : axios.post('http://localhost:8000/admin/formatters', payload);
+            ? axios.put(`http://97.74.92.23:8381/admin/formatters/${editingId}`, payload)
+            : axios.post('http://97.74.92.23:8381/admin/formatters', payload);
 
         req.then(res => {
             if (res.data.status === 'success') {
@@ -102,7 +102,7 @@ export default function Formatters() {
     const handleDelete = (slno: number) => {
         if (!window.confirm("Are you sure you want to delete this payload template?")) return;
         setLoading(true);
-        axios.delete(`http://localhost:8000/admin/formatters/${slno}`)
+        axios.delete(`http://97.74.92.23:8381/admin/formatters/${slno}`)
             .then(res => {
                 if (res.data.status === 'success') {
                     toast.success("Payload template deleted successfully.");
