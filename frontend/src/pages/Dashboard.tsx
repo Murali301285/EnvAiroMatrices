@@ -5,7 +5,7 @@ import {
 } from 'recharts';
 import * as XLSX from 'xlsx';
 import html2canvas from 'html2canvas';
-import { Filter, Download, ArrowLeft, ArrowRight, Building2, Cpu, Maximize, Minimize2, ChevronUp, ChevronDown } from 'lucide-react';
+import { Filter, Download, ArrowLeft, ArrowRight, ChevronsLeft, ChevronsRight, Building2, Cpu, Maximize, Minimize2, ChevronUp, ChevronDown } from 'lucide-react';
 import Select from 'react-select';
 import { toast } from '../utils/toast';
 
@@ -34,9 +34,11 @@ export default function Dashboard({ latestData }: { latestData: string }) {
     // Pagination state for tables
     const [pageMinute, setPageMinute] = useState(0);
     const [rowsMinute, setRowsMinute] = useState(10);
+    const [sortMinute, setSortMinute] = useState<{ key: string, dir: 'asc' | 'desc' } | null>(null);
 
     const [pageRaw, setPageRaw] = useState(0);
     const [rowsRaw, setRowsRaw] = useState(10);
+    const [sortRaw, setSortRaw] = useState<{ key: string, dir: 'asc' | 'desc' } | null>(null);
 
     // New UI states
     const [isFilterOpen, setIsFilterOpen] = useState(true);
@@ -46,7 +48,7 @@ export default function Dashboard({ latestData }: { latestData: string }) {
 
     // Initial Load Devices
     useEffect(() => {
-        axios.get('http://localhost:8381/api/dashboard/devices')
+        axios.get(`http://${window.location.hostname}:8381/api/dashboard/devices`)
             .then(res => {
                 if (res.data?.data) {
                     setAllDevices(res.data.data);
@@ -71,7 +73,7 @@ export default function Dashboard({ latestData }: { latestData: string }) {
         setVisibleParams({});
         setDataList([]);
         if (selectedDevice?.value) {
-            axios.get(`http://localhost:8381/api/dashboard/devices/${selectedDevice.value}/params`)
+            axios.get(`http://${window.location.hostname}:8381/api/dashboard/devices/${selectedDevice.value}/params`)
                 .then(res => {
                     if (res.data?.status === 'success') {
                         const params = res.data.data || [];
@@ -134,7 +136,7 @@ export default function Dashboard({ latestData }: { latestData: string }) {
         if (!selectedDevice?.value) return;
         setLoading(true);
 
-        let url = `http://localhost:8381/api/dashboard/telemetry?limit=${limit}&device_id=${encodeURIComponent(selectedDevice.value)}`;
+        let url = `http://${window.location.hostname}:8381/api/dashboard/telemetry?limit=${limit}&device_id=${encodeURIComponent(selectedDevice.value)}`;
         if (fromDate) url += `&from_date=${encodeURIComponent(fromDate.replace('T', ' ') + ':00')}`;
         if (toDate) url += `&to_date=${encodeURIComponent(toDate.replace('T', ' ') + ':59')}`;
 
@@ -142,10 +144,16 @@ export default function Dashboard({ latestData }: { latestData: string }) {
             .then(res => {
                 if (res.data?.status === 'success') {
                     const raw = res.data.data || [];
+                    const seeds = res.data.day_seeds || {};
                     const processed = raw.map((row: any, idx: number) => {
                         const revTextStr = row.revText || row.revtext || '';
                         const p = parseRevText(revTextStr);
                         const dObj = new Date(row.receivedOn || row.receivedon);
+
+                        const pad = (n: number) => String(n).padStart(2, '0');
+                        const dateKey = `${dObj.getFullYear()}-${pad(dObj.getMonth() + 1)}-${pad(dObj.getDate())}`;
+                        const seedRevText = seeds[dateKey] || '';
+                        const seedP = parseRevText(seedRevText);
 
                         const baseObj: any = {
                             slno_ui: idx + 1,
@@ -164,8 +172,25 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                         deviceParams.forEach(dp => {
                             // Extract numeric values from payload tag dynamically (case insensitive)
                             const upperTag = (dp.api_rev_tag || '').toUpperCase();
-                            const val = p[upperTag];
-                            baseObj[dp.parametername] = val !== undefined ? val : 0;
+                            let val = p[upperTag] !== undefined ? p[upperTag] : 0;
+
+                            // Apply daily commutative sum offset if 'Sum' or explicitly for People Count ('IN'/'OUT') tags
+                            if (dp.valuefactor === 'Sum' || dp.ValueFactor === 'Sum' || upperTag === 'IN' || upperTag === 'OUT') {
+                                const seedVal = seedP[upperTag] !== undefined ? seedP[upperTag] : 0;
+                                let diff = Number(val) - Number(seedVal);
+                                val = Math.max(0, diff); // Prevent negative anomalies
+                            }
+
+                            // Dynamic Decimal/Number Parse Formatting logic
+                            const dtype = dp.datatype || dp.DataType;
+                            if (dtype === 'Decimal' && typeof val === 'number') {
+                                const places = dp.decimalplaces !== undefined ? dp.decimalplaces : (dp.DecimalPlaces !== undefined ? dp.DecimalPlaces : 2);
+                                val = Number(val.toFixed(places));
+                            } else if (dtype === 'Number' && typeof val === 'number') {
+                                val = Math.round(val);
+                            }
+
+                            baseObj[dp.parametername] = val;
                         });
 
                         return baseObj;
@@ -214,17 +239,17 @@ export default function Dashboard({ latestData }: { latestData: string }) {
     const handleDownloadExcel = (tableType: 'minute' | 'raw') => {
         let headers: string[] = [];
         let exportData: any[] = [];
-        const sortedDesc = [...dataList].reverse();
+        const activeData = tableType === 'minute' ? sortedMinuteData : sortedRawData;
 
         if (tableType === 'minute') {
             headers = ["Sl No", "Date", "Time", "Device Name", ...deviceParams.map(dp => dp.parametername)];
-            exportData = sortedDesc.map(d => [
+            exportData = activeData.map(d => [
                 d.slno_ui, d.DateStr, d.TimeStr, d.DeviceName,
                 ...deviceParams.map(dp => d[dp.parametername])
             ]);
         } else {
             headers = ["Sl No", "DateTime", "Device Id", "Location", "Raw Data (revText)"];
-            exportData = sortedDesc.map(d => [
+            exportData = activeData.map(d => [
                 d.slno_ui, d.DateTimeStr, d.DeviceId, d.Location, d.RawData
             ]);
         }
@@ -235,9 +260,49 @@ export default function Dashboard({ latestData }: { latestData: string }) {
         XLSX.writeFile(wb, `${tableType}_telemetry_${new Date().getTime()}.xlsx`);
     };
 
-    const sortedTableData = [...dataList].reverse();
-    const pageMinuteData = sortedTableData.slice(pageMinute * rowsMinute, (pageMinute + 1) * rowsMinute);
-    const pageRawData = sortedTableData.slice(pageRaw * rowsRaw, (pageRaw + 1) * rowsRaw);
+    const sortedMinuteData = React.useMemo(() => {
+        let items = [...dataList].reverse();
+        if (sortMinute) {
+            items.sort((a, b) => {
+                const aVal = a[sortMinute.key];
+                const bVal = b[sortMinute.key];
+                if (aVal < bVal) return sortMinute.dir === 'asc' ? -1 : 1;
+                if (aVal > bVal) return sortMinute.dir === 'asc' ? 1 : -1;
+                return 0;
+            });
+        }
+        return items;
+    }, [dataList, sortMinute]);
+
+    const sortedRawData = React.useMemo(() => {
+        let items = [...dataList].reverse();
+        if (sortRaw) {
+            items.sort((a, b) => {
+                const aVal = a[sortRaw.key];
+                const bVal = b[sortRaw.key];
+                if (aVal < bVal) return sortRaw.dir === 'asc' ? -1 : 1;
+                if (aVal > bVal) return sortRaw.dir === 'asc' ? 1 : -1;
+                return 0;
+            });
+        }
+        return items;
+    }, [dataList, sortRaw]);
+
+    const pageMinuteData = sortedMinuteData.slice(pageMinute * rowsMinute, (pageMinute + 1) * rowsMinute);
+    const pageRawData = sortedRawData.slice(pageRaw * rowsRaw, (pageRaw + 1) * rowsRaw);
+
+    const handleSortToggle = (key: string, type: 'minute' | 'raw') => {
+        if (type === 'minute') {
+            setSortMinute(prev => prev?.key === key && prev.dir === 'asc' ? { key, dir: 'desc' } : { key, dir: 'asc' });
+        } else {
+            setSortRaw(prev => prev?.key === key && prev.dir === 'asc' ? { key, dir: 'desc' } : { key, dir: 'asc' });
+        }
+    };
+
+    const SortIcon = ({ colKey, config }: { colKey: string, config: any }) => {
+        if (!config || config.key !== colKey) return <div className="w-3.5 opacity-0 group-hover:opacity-40 transition-opacity"><ChevronDown size={14} /></div>;
+        return config.dir === 'asc' ? <ChevronUp size={14} className="text-teal-500" /> : <ChevronDown size={14} className="text-teal-500" />;
+    };
 
     const toggleVisibility = (paramName: string) => {
         setVisibleParams(prev => ({
@@ -460,14 +525,22 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                     <table className="w-full text-left text-sm text-slate-600 whitespace-nowrap">
                         <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-xs">
                             <tr>
-                                <th className="px-4 py-4">Sl No</th>
-                                <th className="px-4 py-4">Date</th>
-                                <th className="px-4 py-4">Time</th>
-                                <th className="px-4 py-4 text-sky-500">Device Name</th>
+                                <th onClick={() => handleSortToggle('slno_ui', 'minute')} className="px-4 py-4 cursor-pointer select-none group hover:bg-slate-100 transition-colors">
+                                    <div className="flex items-center gap-1.5 break-normal whitespace-nowrap">Sl No <SortIcon colKey="slno_ui" config={sortMinute} /></div>
+                                </th>
+                                <th onClick={() => handleSortToggle('DateStr', 'minute')} className="px-4 py-4 cursor-pointer select-none group hover:bg-slate-100 transition-colors">
+                                    <div className="flex items-center gap-1.5 break-normal whitespace-nowrap">Date <SortIcon colKey="DateStr" config={sortMinute} /></div>
+                                </th>
+                                <th onClick={() => handleSortToggle('TimeStr', 'minute')} className="px-4 py-4 cursor-pointer select-none group hover:bg-slate-100 transition-colors">
+                                    <div className="flex items-center gap-1.5 break-normal whitespace-nowrap">Time <SortIcon colKey="TimeStr" config={sortMinute} /></div>
+                                </th>
+                                <th onClick={() => handleSortToggle('DeviceName', 'minute')} className="px-4 py-4 text-sky-500 cursor-pointer select-none group hover:bg-slate-100 transition-colors">
+                                    <div className="flex items-center gap-1.5 break-normal whitespace-nowrap">Device Name <SortIcon colKey="DeviceName" config={sortMinute} /></div>
+                                </th>
                                 {/* Dynamic Table Columns */}
                                 {deviceParams.map(dp => (
-                                    <th key={dp.parametername} className="px-4 py-4" style={{ color: dp.color || '#475569' }}>
-                                        {dp.parametername}
+                                    <th key={dp.parametername} onClick={() => handleSortToggle(dp.parametername, 'minute')} className="px-4 py-4 cursor-pointer select-none group hover:bg-slate-100 transition-colors" style={{ color: dp.color || '#475569' }}>
+                                        <div className="flex items-center gap-1.5 break-normal whitespace-nowrap">{dp.parametername} <SortIcon colKey={dp.parametername} config={sortMinute} /></div>
                                     </th>
                                 ))}
                             </tr>
@@ -513,10 +586,12 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                         </select>
                         entries
                     </div>
-                    <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-1.5 md:gap-4">
+                        <button onClick={() => setPageMinute(0)} disabled={pageMinute === 0} className="hover:text-indigo-600 disabled:opacity-30"><ChevronsLeft size={16} /></button>
                         <button onClick={() => setPageMinute(p => Math.max(0, p - 1))} disabled={pageMinute === 0} className="hover:text-indigo-600 disabled:opacity-30"><ArrowLeft size={16} /></button>
-                        <span className="font-semibold text-slate-700">Page {pageMinute + 1} of {Math.ceil(sortedTableData.length / rowsMinute) || 1}</span>
-                        <button onClick={() => setPageMinute(p => Math.min(Math.ceil(sortedTableData.length / rowsMinute) - 1, p + 1))} disabled={pageMinute >= Math.ceil(sortedTableData.length / rowsMinute) - 1} className="hover:text-indigo-600 disabled:opacity-30"><ArrowRight size={16} /></button>
+                        <span className="font-semibold text-slate-700">Page {pageMinute + 1} of {Math.ceil(sortedMinuteData.length / rowsMinute) || 1}</span>
+                        <button onClick={() => setPageMinute(p => Math.min(Math.ceil(sortedMinuteData.length / rowsMinute) - 1, p + 1))} disabled={pageMinute >= Math.ceil(sortedMinuteData.length / rowsMinute) - 1} className="hover:text-indigo-600 disabled:opacity-30"><ArrowRight size={16} /></button>
+                        <button onClick={() => setPageMinute(Math.max(0, Math.ceil(sortedMinuteData.length / rowsMinute) - 1))} disabled={pageMinute >= Math.ceil(sortedMinuteData.length / rowsMinute) - 1} className="hover:text-indigo-600 disabled:opacity-30"><ChevronsRight size={16} /></button>
                     </div>
                 </div>
             </div>
@@ -540,11 +615,21 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                     <table className="w-full text-left text-sm text-slate-600 whitespace-nowrap">
                         <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-xs border-b border-slate-100">
                             <tr>
-                                <th className="px-5 py-4 w-20">Sl No</th>
-                                <th className="px-5 py-4 w-48">DateTime</th>
-                                <th className="px-5 py-4 w-48">Device Id</th>
-                                <th className="px-5 py-4 w-48">Location</th>
-                                <th className="px-5 py-4">Raw Data (revText)</th>
+                                <th onClick={() => handleSortToggle('slno_ui', 'raw')} className="px-5 py-4 w-20 cursor-pointer select-none group hover:bg-slate-100 transition-colors">
+                                    <div className="flex items-center gap-1.5 break-normal whitespace-nowrap">Sl No <SortIcon colKey="slno_ui" config={sortRaw} /></div>
+                                </th>
+                                <th onClick={() => handleSortToggle('DateTimeStr', 'raw')} className="px-5 py-4 w-48 cursor-pointer select-none group hover:bg-slate-100 transition-colors">
+                                    <div className="flex items-center gap-1.5 break-normal whitespace-nowrap">DateTime <SortIcon colKey="DateTimeStr" config={sortRaw} /></div>
+                                </th>
+                                <th onClick={() => handleSortToggle('DeviceId', 'raw')} className="px-5 py-4 w-48 cursor-pointer select-none group hover:bg-slate-100 transition-colors">
+                                    <div className="flex items-center gap-1.5 break-normal whitespace-nowrap">Device Id <SortIcon colKey="DeviceId" config={sortRaw} /></div>
+                                </th>
+                                <th onClick={() => handleSortToggle('Location', 'raw')} className="px-5 py-4 w-48 cursor-pointer select-none group hover:bg-slate-100 transition-colors">
+                                    <div className="flex items-center gap-1.5 break-normal whitespace-nowrap">Location <SortIcon colKey="Location" config={sortRaw} /></div>
+                                </th>
+                                <th onClick={() => handleSortToggle('RawData', 'raw')} className="px-5 py-4 cursor-pointer select-none group hover:bg-slate-100 transition-colors">
+                                    <div className="flex items-center gap-1.5 break-normal whitespace-nowrap">Raw Data (revText) <SortIcon colKey="RawData" config={sortRaw} /></div>
+                                </th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 font-medium">
@@ -576,10 +661,12 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                         </select>
                         entries
                     </div>
-                    <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-1.5 md:gap-4">
+                        <button onClick={() => setPageRaw(0)} disabled={pageRaw === 0} className="hover:text-indigo-600 disabled:opacity-30"><ChevronsLeft size={16} /></button>
                         <button onClick={() => setPageRaw(p => Math.max(0, p - 1))} disabled={pageRaw === 0} className="hover:text-indigo-600 disabled:opacity-30"><ArrowLeft size={16} /></button>
-                        <span className="font-semibold text-slate-700">Page {pageRaw + 1} of {Math.ceil(sortedTableData.length / rowsRaw) || 1}</span>
-                        <button onClick={() => setPageRaw(p => Math.min(Math.ceil(sortedTableData.length / rowsRaw) - 1, p + 1))} disabled={pageRaw >= Math.ceil(sortedTableData.length / rowsRaw) - 1} className="hover:text-indigo-600 disabled:opacity-30"><ArrowRight size={16} /></button>
+                        <span className="font-semibold text-slate-700">Page {pageRaw + 1} of {Math.ceil(sortedRawData.length / rowsRaw) || 1}</span>
+                        <button onClick={() => setPageRaw(p => Math.min(Math.ceil(sortedRawData.length / rowsRaw) - 1, p + 1))} disabled={pageRaw >= Math.ceil(sortedRawData.length / rowsRaw) - 1} className="hover:text-indigo-600 disabled:opacity-30"><ArrowRight size={16} /></button>
+                        <button onClick={() => setPageRaw(Math.max(0, Math.ceil(sortedRawData.length / rowsRaw) - 1))} disabled={pageRaw >= Math.ceil(sortedRawData.length / rowsRaw) - 1} className="hover:text-indigo-600 disabled:opacity-30"><ChevronsRight size={16} /></button>
                     </div>
                 </div>
             </div>

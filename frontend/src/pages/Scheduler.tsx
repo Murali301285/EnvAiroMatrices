@@ -9,14 +9,14 @@ import Select from 'react-select';
 
 export default function Scheduler() {
     const [schedulers, setSchedulers] = useState<any[]>([]);
-    const [devices, setDevices] = useState<any[]>([]);
+    const [customers, setCustomers] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [isAddModalOpen, setIsAddModalOpen] = useState(false);
     const [editingId, setEditingId] = useState<number | null>(null);
 
     // Form State
-    const [formDeviceId, setFormDeviceId] = useState("");
+    const [formCompanyCode, setFormCompanyCode] = useState("");
     const [formFrequency, setFormFrequency] = useState("15");
     const [formStartTime, setFormStartTime] = useState("00:00");
     const [formLocalJson, setFormLocalJson] = useState(false);
@@ -31,12 +31,12 @@ export default function Scheduler() {
     const fetchData = async () => {
         setLoading(true);
         try {
-            const [devRes, schRes] = await Promise.all([
-                axios.get('http://localhost:8381/admin/devices'),
-                axios.get('http://localhost:8381/admin/schedulers')
+            const [custRes, schRes] = await Promise.all([
+                axios.get(`http://${window.location.hostname}:8381/admin/customers`),
+                axios.get(`http://${window.location.hostname}:8381/admin/schedulers`)
             ]);
 
-            if (devRes.data?.status === 'success') setDevices(devRes.data.data || []);
+            if (custRes.data?.status === 'success') setCustomers(custRes.data.data || []);
             if (schRes.data?.status === 'success') setSchedulers(schRes.data.data || []);
         } catch (err) {
             toast.error("Network Error: Backend Offline", err);
@@ -50,8 +50,8 @@ export default function Scheduler() {
     }, []);
 
     const handleSave = () => {
-        if (!formDeviceId) {
-            toast.error("Device ID is required!");
+        if (!formCompanyCode) {
+            toast.error("Company selection is required!");
             return;
         }
 
@@ -62,7 +62,7 @@ export default function Scheduler() {
 
         setSaving(true);
         const payload = {
-            deviceid: formDeviceId,
+            customer_code: formCompanyCode,
             frequency: parseInt(formFrequency),
             starting_time: formStartTime,
             create_local_json: formLocalJson,
@@ -74,8 +74,8 @@ export default function Scheduler() {
         };
 
         const req = editingId
-            ? axios.put(`http://localhost:8381/admin/schedulers/${editingId}`, payload)
-            : axios.post('http://localhost:8381/admin/schedulers', payload);
+            ? axios.put(`http://${window.location.hostname}:8381/admin/schedulers/${editingId}`, payload)
+            : axios.post(`http://${window.location.hostname}:8381/admin/schedulers`, payload);
 
         req.then(res => {
             if (res.data.status === 'success') {
@@ -90,7 +90,7 @@ export default function Scheduler() {
     };
 
     const handleEdit = (row: any) => {
-        setFormDeviceId(row.deviceid || "");
+        setFormCompanyCode(row.customer_code || "");
         setFormFrequency((row.frequency || 15).toString());
         setFormStartTime(row.starting_time || "00:00");
         setFormLocalJson(row.create_local_json || false);
@@ -106,7 +106,7 @@ export default function Scheduler() {
     const handleDelete = (slno: number) => {
         if (!window.confirm("Are you sure you want to drop this job scheduler target?")) return;
         setLoading(true);
-        axios.delete(`http://localhost:8381/admin/schedulers/${slno}`)
+        axios.delete(`http://${window.location.hostname}:8381/admin/schedulers/${slno}`)
             .then(res => {
                 if (res.data.status === 'success') {
                     toast.success("Job Scheduler completely dropped.");
@@ -122,20 +122,20 @@ export default function Scheduler() {
     const handleCloseModal = () => {
         setIsAddModalOpen(false);
         setEditingId(null);
-        setFormDeviceId(""); setFormFrequency("15"); setFormStartTime("00:00");
+        setFormCompanyCode(""); setFormFrequency("15"); setFormStartTime("00:00");
         setFormLocalJson(false); setFormAlertReq(false); setFormAlertFreq("1");
         setFormStagingUrl(""); setFormIsStaging(false); setFormLiveUrl("");
     };
 
-    const deviceOptions = devices.map(d => ({
-        value: d.deviceid,
-        label: `${d.deviceid} (${d.customer_code})`
+    const companyOptions = customers.map(c => ({
+        value: c.customer_code,
+        label: `${c.customername} (${c.customer_code})`
     }));
 
     const columns = useMemo<ColumnDef<any, any>[]>(() => [
         {
-            accessorKey: 'deviceid',
-            header: 'Node Target',
+            accessorKey: 'customer_code',
+            header: 'Target Company',
             cell: info => <span className="font-mono font-bold text-slate-800 bg-slate-100 px-2.5 py-1 rounded border border-slate-200">{info.getValue()}</span>
         },
         {
@@ -239,12 +239,12 @@ export default function Scheduler() {
                                 <div className="col-span-1 border-r border-slate-100 pr-6 space-y-5 relative z-10">
                                     <h4 className="text-sm font-bold tracking-widest text-slate-400 uppercase">Primary Node</h4>
                                     <div>
-                                        <label className="block text-sm font-semibold text-slate-700 mb-2">Device Target *</label>
+                                        <label className="block text-sm font-semibold text-slate-700 mb-2">Target Company *</label>
                                         <Select
-                                            options={deviceOptions}
-                                            value={deviceOptions.find(opt => opt.value === formDeviceId) || null}
-                                            onChange={(selected: any) => setFormDeviceId(selected ? selected.value : '')}
-                                            placeholder="Assign target..."
+                                            options={companyOptions}
+                                            value={companyOptions.find(opt => opt.value === formCompanyCode) || null}
+                                            onChange={(selected: any) => setFormCompanyCode(selected ? selected.value : '')}
+                                            placeholder="Assign target company..."
                                             isClearable
                                             styles={{
                                                 control: (base) => ({
@@ -304,15 +304,6 @@ export default function Scheduler() {
                                     <div className="bg-emerald-50 rounded-xl p-4 border border-emerald-100">
                                         <div className="flex items-center justify-between mb-4">
                                             <h4 className="text-sm font-bold tracking-widest text-emerald-600 uppercase flex items-center gap-2"><Server size={16} /> Target Delivery Endpoints</h4>
-                                            <div className="flex items-center gap-3">
-                                                <span className="text-xs font-semibold text-emerald-700">Write Local System JSON Stream</span>
-                                                <button
-                                                    onClick={() => setFormLocalJson(!formLocalJson)}
-                                                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${formLocalJson ? 'bg-emerald-500' : 'bg-sky-200'}`}
-                                                >
-                                                    <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${formLocalJson ? 'translate-x-5' : 'translate-x-1'}`} />
-                                                </button>
-                                            </div>
                                         </div>
 
                                         <div className="space-y-4">

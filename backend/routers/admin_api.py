@@ -80,25 +80,26 @@ async def add_customer(request: Request):
 # ----- PARAMETERS -----
 @router.get("/parameters")
 def get_params():
-    return execute_query("SELECT slno, parameterName, param_tag, labelName, color, unit, conversionFactor, valueFactor, inputField, status, datatype, decimalplaces FROM tblParameterMaster WHERE isDeleted=0")
+    return execute_query("SELECT slno, parameterName, param_tag, labelName, color, unit, conversionFactor, valueFactor, inputField, status, datatype, decimalplaces, status_conditions FROM tblParameterMaster WHERE isDeleted=0")
 
 @router.post("/parameters")
 async def add_param(request: Request):
     p = await request.json()
-    sql = "INSERT INTO tblParameterMaster (parameterName, param_tag, labelName, color, unit, conversionFactor, valueFactor, inputField, status, datatype, decimalplaces) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING slno"
-    return execute_query(sql, (p.get('parameterName'), p.get('param_tag'), p.get('labelName'), p.get('color'), p.get('unit'), p.get('conversionFactor'), p.get('valueFactor', 'Avg'), p.get('inputField'), p.get('status', 1), p.get('datatype', 'Decimal'), p.get('decimalplaces')), False)
+    conds = json.dumps(p.get('status_conditions', []))
+    sql = "INSERT INTO tblParameterMaster (parameterName, param_tag, labelName, color, unit, conversionFactor, valueFactor, inputField, status, datatype, decimalplaces, status_conditions) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING slno"
+    return execute_query(sql, (p.get('parameterName'), p.get('param_tag'), p.get('labelName'), p.get('color'), p.get('unit'), p.get('conversionFactor'), p.get('valueFactor', 'Avg'), p.get('inputField'), p.get('status', 1), p.get('datatype', 'Decimal'), p.get('decimalplaces'), conds), False)
 
 # ----- DEVICES -----
 @router.get("/devices")
 def get_devices():
-    return execute_query("SELECT slno, customer_code, deviceid, alias, location, address, working_hours_json, active, remarks FROM tblDeviceMaster WHERE isDeleted=0")
+    return execute_query("SELECT slno, customer_code, deviceid, alias, location, address, working_hours_json, active, remarks, create_json_file, post_data FROM tblDeviceMaster WHERE isDeleted=0")
 
 @router.post("/devices")
 async def add_device(request: Request):
     p = await request.json()
     whj = json.dumps(p.get('working_hours_json', {}))
-    sql = "INSERT INTO tblDeviceMaster (customer_code, deviceid, alias, location, address, working_hours_json, active, remarks) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING slno"
-    return execute_query(sql, (p.get('customer_code'), p.get('deviceid'), p.get('alias'), p.get('location'), p.get('address'), whj, p.get('active', 1), p.get('remarks')), False)
+    sql = "INSERT INTO tblDeviceMaster (customer_code, deviceid, alias, location, address, working_hours_json, active, remarks, create_json_file, post_data) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING slno"
+    return execute_query(sql, (p.get('customer_code'), p.get('deviceid'), p.get('alias'), p.get('location'), p.get('address'), whj, p.get('active', 1), p.get('remarks'), p.get('create_json_file', False), p.get('post_data', False)), False)
 
 # ----- JSON FORMATTERS -----
 @router.get("/formatters")
@@ -110,6 +111,72 @@ async def add_formatter(request: Request):
     p = await request.json()
     sql = "INSERT INTO tblJsonFormatter (name, jsonTemplate, storedProcedureName, type) VALUES (%s, %s, %s, %s) RETURNING slno"
     return execute_query(sql, (p.get('name'), p.get('jsonTemplate'), p.get('storedProcedureName'), p.get('type')), False)
+
+@router.post("/formatters/test-json")
+async def build_test_json(request: Request):
+    """On-demand simulator engine mapping real-world outputs against templates."""
+    p = await request.json()
+    slno = p.get('slno')
+    
+    if not slno: return {"status": "error", "message": "Missing formatter ID"}
+        
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT jsonTemplate, storedProcedureName FROM tblJsonFormatter WHERE slno=%s", (slno,))
+            fmt = cursor.fetchone()
+            if not fmt: return {"status": "error", "message": "Formatter not found."}
+            
+            cursor.execute("SELECT deviceid FROM tblMinuteDetails ORDER BY created_at DESC LIMIT 1")
+            dev_row = cursor.fetchone()
+            if not dev_row: return {"status": "error", "message": "No data found!"}
+                
+            dev_id = dev_row['deviceid']
+            sp_name = fmt.get('storedprocedurename') or fmt.get('storedProcedureName')
+            template_str = fmt.get('jsontemplate') or fmt.get('jsonTemplate')
+            
+            # Extract RAW SQL DB Context first to pass to frontend
+            db_context = {}
+            if sp_name:
+                try:
+                    cursor.execute(f"SELECT * FROM {sp_name}(%s)", (dev_id,))
+                    result = cursor.fetchone()
+                    if result: db_context = dict(result)
+                except Exception as db_e:
+                    return {"status": "error", "message": f"SP Execution Error: {db_e}"}
+            
+            # Now run mapping hook via standard pipeline manually
+            import json
+            data = json.loads(template_str)
+            def traverse(obj):
+                if isinstance(obj, dict): return {k: traverse(v) for k, v in obj.items()}
+                elif isinstance(obj, list): return [traverse(elem) for elem in obj]
+                elif isinstance(obj, str):
+                    if obj.startswith('#'): return obj[1:]
+                    elif obj.startswith('$'):
+                        tag_name = obj[1:]
+                        val = db_context.get(tag_name)
+                        if val is None: val = db_context.get(tag_name.lower())
+                        if val is not None:
+                            import decimal
+                            if isinstance(val, decimal.Decimal):
+                                return int(val) if val % 1 == 0 else float(val)
+                            return val
+                            
+                        return f"NOT_FOUND_{tag_name}"
+                    return obj
+                return obj
+                
+            res = json.dumps(traverse(data), indent=2, default=str)
+            
+            # Convert decimal/numeric results safely into string/primitive serializables for React
+            safe_context = {k: str(v) for k, v in db_context.items()}
+            
+            return {"status": "success", "device_used": dev_id, "payload": res, "sql_data": safe_context}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
+        if conn: conn.close()
 
 # ----- PAGES -----
 @router.get("/pages")
@@ -167,18 +234,18 @@ async def bulk_param_mapping(request: Request):
 # ----- DEVICE JSON MAPPING -----
 @router.get("/json-mapping")
 def get_json_mappings():
-    return execute_query("SELECT slno, deviceid, scheduledjsonid AS scheduled_json_id, alertjsonid AS alert_json_id, resolvedjsonid AS resolved_json_id FROM tblDeviceJsonMapping WHERE isDeleted=0")
+    return execute_query("SELECT slno, customer_code, scheduledjsonid AS scheduled_json_id, alertjsonid AS alert_json_id, resolvedjsonid AS resolved_json_id, folder_name FROM tblDeviceJsonMapping WHERE isDeleted=0")
 
 @router.post("/json-mapping")
 async def add_json_mapping(request: Request):
     p = await request.json()
-    dev = p.get('deviceid')
+    cust = p.get('customer_code')
     
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute("DELETE FROM tblDeviceJsonMapping WHERE deviceid=%s", (dev,))
-            cursor.execute("INSERT INTO tblDeviceJsonMapping (deviceid, scheduledjsonid, alertjsonid, resolvedjsonid) VALUES (%s, %s, %s, %s)", (dev, p.get('scheduled_json_id'), p.get('alert_json_id'), p.get('resolved_json_id')))
+            cursor.execute("DELETE FROM tblDeviceJsonMapping WHERE customer_code=%s", (cust,))
+            cursor.execute("INSERT INTO tblDeviceJsonMapping (customer_code, scheduledjsonid, alertjsonid, resolvedjsonid, folder_name) VALUES (%s, %s, %s, %s, %s)", (cust, p.get('scheduled_json_id'), p.get('alert_json_id'), p.get('resolved_json_id'), p.get('folder_name', '')))
             conn.commit()
         return {"status": "success"}
     except Exception as e:
@@ -190,13 +257,13 @@ async def add_json_mapping(request: Request):
 # ----- SCHEDULER -----
 @router.get("/schedulers")
 def get_schedulers():
-    return execute_query("SELECT slno, deviceid, frequency, starting_time, create_local_json, alert_req, alert_freq, post_url_staging, is_staging, post_url_live FROM tblScheduler WHERE isDeleted=0")
+    return execute_query("SELECT slno, customer_code, frequency, starting_time, create_local_json, alert_req, alert_freq, post_url_staging, is_staging, post_url_live FROM tblScheduler WHERE isDeleted=0")
 
 @router.post("/schedulers")
 async def add_scheduler(request: Request):
     p = await request.json()
-    sql = "INSERT INTO tblScheduler (deviceid, frequency, starting_time, create_local_json, alert_req, alert_freq, post_url_staging, is_staging, post_url_live) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING slno"
-    return execute_query(sql, (p.get('deviceid'), p.get('frequency'), p.get('starting_time'), p.get('create_local_json', False), p.get('alert_req', False), p.get('alert_freq'), p.get('post_url_staging'), p.get('is_staging', False), p.get('post_url_live')), False)
+    sql = "INSERT INTO tblScheduler (customer_code, frequency, starting_time, create_local_json, alert_req, alert_freq, post_url_staging, is_staging, post_url_live) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING slno"
+    return execute_query(sql, (p.get('customer_code'), p.get('frequency'), p.get('starting_time'), p.get('create_local_json', False), p.get('alert_req', False), p.get('alert_freq'), p.get('post_url_staging'), p.get('is_staging', False), p.get('post_url_live')), False)
 
 # ----- UNIVERSAL EDIT AND DELETE ENDPOINTS -----
 @router.delete("/{entity}/{slno}")
@@ -223,10 +290,11 @@ async def update_entity(entity: str, slno: int, request: Request):
         details = json.dumps(p.get('details', {}))
         return execute_query("UPDATE tblCustomerMaster SET customerName=%s, customer_code=%s, details=%s WHERE slno=%s", (p.get('customerName'), p.get('customer_code'), details, slno), False)
     elif entity == "parameters":
-        return execute_query("UPDATE tblParameterMaster SET parameterName=%s, param_tag=%s, labelName=%s, color=%s, unit=%s, conversionFactor=%s, valueFactor=%s, inputField=%s, status=%s, datatype=%s, decimalplaces=%s WHERE slno=%s", (p.get('parameterName'), p.get('param_tag'), p.get('labelName'), p.get('color'), p.get('unit'), p.get('conversionFactor'), p.get('valueFactor', 'Avg'), p.get('inputField'), p.get('status', 1), p.get('datatype', 'Decimal'), p.get('decimalplaces'), slno), False)
+        conds = json.dumps(p.get('status_conditions', []))
+        return execute_query("UPDATE tblParameterMaster SET parameterName=%s, param_tag=%s, labelName=%s, color=%s, unit=%s, conversionFactor=%s, valueFactor=%s, inputField=%s, status=%s, datatype=%s, decimalplaces=%s, status_conditions=%s WHERE slno=%s", (p.get('parameterName'), p.get('param_tag'), p.get('labelName'), p.get('color'), p.get('unit'), p.get('conversionFactor'), p.get('valueFactor', 'Avg'), p.get('inputField'), p.get('status', 1), p.get('datatype', 'Decimal'), p.get('decimalplaces'), conds, slno), False)
     elif entity == "devices":
         whj = json.dumps(p.get('working_hours_json', {}))
-        return execute_query("UPDATE tblDeviceMaster SET customer_code=%s, deviceid=%s, alias=%s, location=%s, address=%s, working_hours_json=%s, active=%s, remarks=%s WHERE slno=%s", (p.get('customer_code'), p.get('deviceid'), p.get('alias'), p.get('location'), p.get('address'), whj, p.get('active', 1), p.get('remarks'), slno), False)
+        return execute_query("UPDATE tblDeviceMaster SET customer_code=%s, deviceid=%s, alias=%s, location=%s, address=%s, working_hours_json=%s, active=%s, remarks=%s, create_json_file=%s, post_data=%s WHERE slno=%s", (p.get('customer_code'), p.get('deviceid'), p.get('alias'), p.get('location'), p.get('address'), whj, p.get('active', 1), p.get('remarks'), p.get('create_json_file', False), p.get('post_data', False), slno), False)
     elif entity == "formatters":
         return execute_query("UPDATE tblJsonFormatter SET name=%s, jsonTemplate=%s, storedProcedureName=%s, type=%s WHERE slno=%s", (p.get('name'), p.get('jsonTemplate'), p.get('storedProcedureName'), p.get('type'), slno), False)
     elif entity == "pages":
@@ -241,9 +309,9 @@ async def update_entity(entity: str, slno: int, request: Request):
     elif entity == "param-mapping":
         return execute_query("UPDATE tblDeviceParameterMapping SET deviceid=%s, parameter_id=%s, api_rev_tag=%s WHERE slno=%s", (p.get('deviceid'), p.get('parameter_id'), p.get('api_rev_tag'), slno), False)
     elif entity == "json-mapping":
-        return execute_query("UPDATE tblDeviceJsonMapping SET deviceid=%s, scheduledjsonid=%s, alertjsonid=%s, resolvedjsonid=%s WHERE slno=%s", (p.get('deviceid'), p.get('scheduled_json_id'), p.get('alert_json_id'), p.get('resolved_json_id'), slno), False)
+        return execute_query("UPDATE tblDeviceJsonMapping SET customer_code=%s, scheduledjsonid=%s, alertjsonid=%s, resolvedjsonid=%s, folder_name=%s WHERE slno=%s", (p.get('customer_code'), p.get('scheduled_json_id'), p.get('alert_json_id'), p.get('resolved_json_id'), p.get('folder_name', ''), slno), False)
     elif entity == "schedulers":
-        return execute_query("UPDATE tblScheduler SET deviceid=%s, frequency=%s, starting_time=%s, create_local_json=%s, alert_req=%s, alert_freq=%s, post_url_staging=%s, is_staging=%s, post_url_live=%s WHERE slno=%s", (p.get('deviceid'), p.get('frequency'), p.get('starting_time'), p.get('create_local_json', False), p.get('alert_req', False), p.get('alert_freq'), p.get('post_url_staging'), p.get('is_staging', False), p.get('post_url_live'), slno), False)
+        return execute_query("UPDATE tblScheduler SET customer_code=%s, frequency=%s, starting_time=%s, create_local_json=%s, alert_req=%s, alert_freq=%s, post_url_staging=%s, is_staging=%s, post_url_live=%s WHERE slno=%s", (p.get('customer_code'), p.get('frequency'), p.get('starting_time'), p.get('create_local_json', False), p.get('alert_req', False), p.get('alert_freq'), p.get('post_url_staging'), p.get('is_staging', False), p.get('post_url_live'), slno), False)
     
     return {"status": "error", "message": "Invalid entity context"}
 

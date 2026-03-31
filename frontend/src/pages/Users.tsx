@@ -26,8 +26,8 @@ export default function Users() {
         setLoading(true);
         try {
             const [usersRes, custRes] = await Promise.all([
-                axios.get('http://localhost:8381/admin/users'),
-                axios.get('http://localhost:8381/admin/customers')
+                axios.get(`http://${window.location.hostname}:8381/admin/users`),
+                axios.get(`http://${window.location.hostname}:8381/admin/customers`)
             ]);
 
             if (usersRes.data?.status === 'success') setUsers(usersRes.data.data || []);
@@ -80,8 +80,8 @@ export default function Users() {
         };
 
         const req = editingId
-            ? axios.put(`http://localhost:8381/admin/users/${editingId}`, payload)
-            : axios.post('http://localhost:8381/admin/users', payload);
+            ? axios.put(`http://${window.location.hostname}:8381/admin/users/${editingId}`, payload)
+            : axios.post(`http://${window.location.hostname}:8381/admin/users`, payload);
 
         req.then(res => {
             if (res.data.status === 'success') {
@@ -116,7 +116,7 @@ export default function Users() {
     const handleDelete = (slno: number) => {
         if (!window.confirm("Are you sure you want to deactivate this identity profile?")) return;
         setLoading(true);
-        axios.delete(`http://localhost:8381/admin/users/${slno}`)
+        axios.delete(`http://${window.location.hostname}:8381/admin/users/${slno}`)
             .then(res => {
                 if (res.data.status === 'success') {
                     toast.success("User access revoked.");

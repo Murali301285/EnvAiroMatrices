@@ -6,27 +6,28 @@ import LoadingOverlay from '../components/LoadingOverlay';
 import Select from 'react-select';
 
 export default function JsonMapping() {
-    const [devices, setDevices] = useState<any[]>([]);
+    const [customers, setCustomers] = useState<any[]>([]);
     const [formatters, setFormatters] = useState<any[]>([]);
     const [mappings, setMappings] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
 
-    const [selectedDevice, setSelectedDevice] = useState("");
+    const [selectedCompany, setSelectedCompany] = useState("");
     const [scheduledId, setScheduledId] = useState("");
     const [alertId, setAlertId] = useState("");
     const [resolvedId, setResolvedId] = useState("");
+    const [folderName, setFolderName] = useState("");
 
     const fetchData = async () => {
         setLoading(true);
         try {
-            const [devRes, fmtRes, mapRes] = await Promise.all([
-                axios.get('http://localhost:8381/admin/devices'),
-                axios.get('http://localhost:8381/admin/formatters'),
-                axios.get('http://localhost:8381/admin/json-mapping')
+            const [custRes, fmtRes, mapRes] = await Promise.all([
+                axios.get(`http://${window.location.hostname}:8381/admin/customers`),
+                axios.get(`http://${window.location.hostname}:8381/admin/formatters`),
+                axios.get(`http://${window.location.hostname}:8381/admin/json-mapping`)
             ]);
 
-            if (devRes.data?.status === 'success') setDevices(devRes.data.data || []);
+            if (custRes.data?.status === 'success') setCustomers(custRes.data.data || []);
             if (fmtRes.data?.status === 'success') setFormatters(fmtRes.data.data || []);
             if (mapRes.data?.status === 'success') setMappings(mapRes.data.data || []);
         } catch (err) {
@@ -41,33 +42,35 @@ export default function JsonMapping() {
     }, []);
 
     useEffect(() => {
-        if (!selectedDevice) {
-            setScheduledId(""); setAlertId(""); setResolvedId("");
+        if (!selectedCompany) {
+            setScheduledId(""); setAlertId(""); setResolvedId(""); setFolderName("");
             return;
         }
 
-        const exactMap = mappings.find(m => m.deviceid === selectedDevice);
+        const exactMap = mappings.find(m => m.customer_code === selectedCompany);
         if (exactMap) {
             setScheduledId(exactMap.scheduled_json_id?.toString() || "");
             setAlertId(exactMap.alert_json_id?.toString() || "");
             setResolvedId(exactMap.resolved_json_id?.toString() || "");
+            setFolderName(exactMap.folder_name || "");
         } else {
-            setScheduledId(""); setAlertId(""); setResolvedId("");
+            setScheduledId(""); setAlertId(""); setResolvedId(""); setFolderName("");
         }
-    }, [selectedDevice, mappings]);
+    }, [selectedCompany, mappings]);
 
     const handleSave = () => {
-        if (!selectedDevice || !scheduledId) {
-            toast.error("Device ID and Scheduled JSON Template are mandatory.");
+        if (!selectedCompany) {
+            toast.error("Company Selection is mandatory.");
             return;
         }
 
         setSaving(true);
-        axios.post('http://localhost:8381/admin/json-mapping', {
-            deviceid: selectedDevice,
+        axios.post(`http://${window.location.hostname}:8381/admin/json-mapping`, {
+            customer_code: selectedCompany,
             scheduled_json_id: scheduledId ? parseInt(scheduledId) : null,
             alert_json_id: alertId ? parseInt(alertId) : null,
-            resolved_json_id: resolvedId ? parseInt(resolvedId) : null
+            resolved_json_id: resolvedId ? parseInt(resolvedId) : null,
+            folder_name: folderName
         }).then(res => {
             if (res.data.status === 'success') {
                 toast.success("Payload mapping saved successfully.");
@@ -83,9 +86,9 @@ export default function JsonMapping() {
     const alertFormatters = formatters.filter(f => f.type === 'Alert');
     const resolvedFormatters = formatters.filter(f => f.type === 'Resolved');
 
-    const deviceOptions = devices.map(d => ({
-        value: d.deviceid,
-        label: `${d.deviceid} (${d.customer_code})`
+    const companyOptions = customers.map(c => ({
+        value: c.customer_code,
+        label: `${c.customername} (${c.customer_code})`
     }));
 
     return (
@@ -96,17 +99,17 @@ export default function JsonMapping() {
                 <div>
                     <h2 className="text-2xl font-bold text-slate-800 tracking-tight flex items-center gap-3">
                         <span className="p-2 bg-teal-50 rounded-xl text-teal-600"><Route size={20} /></span>
-                        Device Integration Mapping
+                        Company API Mapping
                     </h2>
-                    <p className="text-slate-500 mt-1 text-sm font-medium">Link specific data templates to physical hardware logic circuits.</p>
+                    <p className="text-slate-500 mt-1 text-sm font-medium">Link specific data templates directly to Company asset logic wrappers.</p>
                 </div>
                 <div className="flex items-center gap-4 bg-white p-2.5 rounded-xl border border-slate-200 shadow-sm relative z-30">
                     <div className="w-72">
                         <Select
-                            options={deviceOptions}
-                            value={deviceOptions.find(opt => opt.value === selectedDevice) || null}
-                            onChange={(selected: any) => setSelectedDevice(selected ? selected.value : '')}
-                            placeholder="Search Target Hardware..."
+                            options={companyOptions}
+                            value={companyOptions.find(opt => opt.value === selectedCompany) || null}
+                            onChange={(selected: any) => setSelectedCompany(selected ? selected.value : '')}
+                            placeholder="Select Customer Company..."
                             isClearable
                             styles={{
                                 control: (base) => ({
@@ -128,7 +131,7 @@ export default function JsonMapping() {
 
                     <button
                         onClick={handleSave}
-                        disabled={!selectedDevice}
+                        disabled={!selectedCompany}
                         className="disabled:opacity-50 disabled:cursor-not-allowed bg-gradient-to-r from-indigo-500 to-sky-500 hover:from-indigo-400 hover:to-sky-400 text-white font-semibold px-5 py-[9px] text-sm rounded-lg flex items-center gap-2 transition-all shadow-md shadow-teal-500/20 hover:shadow-teal-500/40"
                     >
                         <Save size={16} /> Link Route
@@ -139,13 +142,13 @@ export default function JsonMapping() {
             <div className="bg-white rounded-3xl border border-slate-100 shadow-xl shadow-slate-200/50 overflow-hidden flex-1 relative transition-all flex flex-col items-center justify-center z-10">
                 {loading ? (
                     <div className="text-slate-400 font-medium animate-pulse text-lg">Fetching Hierarchy...</div>
-                ) : !selectedDevice ? (
+                ) : !selectedCompany ? (
                     <div className="flex flex-col items-center justify-center text-slate-400 p-12 text-center bg-transparent">
                         <div className="bg-slate-50 p-6 rounded-full shadow-inner border border-slate-200 mb-6 group hover:scale-105 transition-transform">
                             <Route size={56} className="text-slate-300 group-hover:text-indigo-400 transition-colors" />
                         </div>
                         <p className="text-xl text-slate-600 font-bold mb-2">Awaiting Context</p>
-                        <p className="text-base text-slate-500 max-w-md leading-relaxed">Select an endpoint node from the dropdown registry above to view or modify its outbound traffic template mappings.</p>
+                        <p className="text-base text-slate-500 max-w-md leading-relaxed">Select a company from the dropdown registry above to view or modify its outbound traffic template mappings.</p>
                     </div>
                 ) : (
                     <div className="w-full h-full p-8 flex flex-col bg-slate-50/50 overflow-y-auto">
@@ -163,17 +166,32 @@ export default function JsonMapping() {
                                         <p className="text-sm text-slate-500 mt-1">The primary JSON payload structure broadcasted during periodic routine operational cycles.</p>
                                     </div>
                                 </div>
-                                <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2 ml-1">Assigned Template Component (Required)</label>
-                                <select
-                                    value={scheduledId}
-                                    onChange={e => setScheduledId(e.target.value)}
-                                    className="w-full px-4 py-3 border border-sky-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm font-semibold text-sky-900 bg-emerald-50/30"
-                                >
-                                    <option value="">-- Unassigned --</option>
-                                    {scheduledFormatters.map(f => (
-                                        <option key={f.slno} value={f.slno}>{f.name} (ID: {f.slno})</option>
-                                    ))}
-                                </select>
+                                <div className="space-y-4">
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2 ml-1">Assigned Template Component (Required)</label>
+                                        <select
+                                            value={scheduledId}
+                                            onChange={e => setScheduledId(e.target.value)}
+                                            className="w-full px-4 py-3 border border-sky-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm font-semibold text-sky-900 bg-emerald-50/30"
+                                        >
+                                            <option value="">-- Unassigned --</option>
+                                            {scheduledFormatters.map(f => (
+                                                <option key={f.slno} value={f.slno}>{f.name} (ID: {f.slno})</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2 ml-1">Local Output Configuration (Folder Name)</label>
+                                        <input
+                                            type="text"
+                                            value={folderName}
+                                            onChange={e => setFolderName(e.target.value)}
+                                            placeholder="ex: schJsons or jsons/Sch"
+                                            className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm font-mono text-slate-700 hover:bg-slate-50"
+                                        />
+                                        <p className="text-xs text-slate-400 mt-2 px-1">Note: This creates nested directories automatically if not found (e.g. `jsons/Sch`) and stores files formatting as <code className="bg-slate-100 text-slate-600 px-1 py-0.5 rounded">deviceid_datetime_sch.json</code></p>
+                                    </div>
+                                </div>
                             </div>
 
                             <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm relative z-0">

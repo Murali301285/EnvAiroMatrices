@@ -24,14 +24,16 @@ export default function Devices() {
     const [formWhStart, setFormWhStart] = useState("09:00");
     const [formWhEnd, setFormWhEnd] = useState("18:00");
     const [formActive, setFormActive] = useState(true);
+    const [formCreateJsonFile, setFormCreateJsonFile] = useState(false);
+    const [formPostData, setFormPostData] = useState(false);
     const [formRemarks, setFormRemarks] = useState("");
 
     const fetchData = async () => {
         setLoading(true);
         try {
             const [custRes, devRes] = await Promise.all([
-                axios.get('http://localhost:8381/admin/customers'),
-                axios.get('http://localhost:8381/admin/devices')
+                axios.get(`http://${window.location.hostname}:8381/admin/customers`),
+                axios.get(`http://${window.location.hostname}:8381/admin/devices`)
             ]);
 
             if (custRes.data?.status === 'success') setCustomers(custRes.data.data || []);
@@ -72,12 +74,14 @@ export default function Devices() {
             address: formAddress,
             working_hours_json: { start: formWhStart, end: formWhEnd },
             active: formActive ? 1 : 0,
+            create_json_file: formCreateJsonFile,
+            post_data: formPostData,
             remarks: formRemarks
         };
 
         const req = editingId
-            ? axios.put(`http://localhost:8381/admin/devices/${editingId}`, payload)
-            : axios.post('http://localhost:8381/admin/devices', payload);
+            ? axios.put(`http://${window.location.hostname}:8381/admin/devices/${editingId}`, payload)
+            : axios.post(`http://${window.location.hostname}:8381/admin/devices`, payload);
 
         req.then(res => {
             if (res.data.status === 'success') {
@@ -108,6 +112,8 @@ export default function Devices() {
         setFormWhEnd(whEnd);
 
         setFormActive(row.active === 1 || row.active === true);
+        setFormCreateJsonFile(row.create_json_file === 1 || row.create_json_file === true);
+        setFormPostData(row.post_data === 1 || row.post_data === true);
         setFormRemarks(row.remarks || "");
         setEditingId(row.slno);
         setIsAddModalOpen(true);
@@ -116,7 +122,7 @@ export default function Devices() {
     const handleDelete = (slno: number) => {
         if (!window.confirm("Are you sure you want to delete this device endpoint?")) return;
         setLoading(true);
-        axios.delete(`http://localhost:8381/admin/devices/${slno}`)
+        axios.delete(`http://${window.location.hostname}:8381/admin/devices/${slno}`)
             .then(res => {
                 if (res.data.status === 'success') {
                     toast.success("Device removed successfully!");
@@ -140,6 +146,8 @@ export default function Devices() {
         setFormWhStart("09:00");
         setFormWhEnd("18:00");
         setFormActive(true);
+        setFormCreateJsonFile(false);
+        setFormPostData(false);
         setFormRemarks("");
     };
 
@@ -204,6 +212,16 @@ export default function Devices() {
                     </span>
                 );
             }
+        },
+        {
+            id: 'export_config',
+            header: 'Export Config',
+            cell: info => (
+                <div className="flex flex-col gap-1.5 min-w-[90px]">
+                    {info.row.original.create_json_file ? <span className="text-[10px] text-white font-bold border border-emerald-600 bg-emerald-500 px-1.5 py-0.5 rounded-sm w-fit uppercase tracking-wider shadow-sm">JSON: ON</span> : <span className="text-[10px] text-slate-400 bg-slate-50 border border-slate-200 px-1.5 py-0.5 rounded-sm w-fit uppercase tracking-wider font-semibold">JSON: OFF</span>}
+                    {info.row.original.post_data ? <span className="text-[10px] text-white font-bold border border-emerald-600 bg-emerald-500 px-1.5 py-0.5 rounded-sm w-fit uppercase tracking-wider shadow-sm">POST: ON</span> : <span className="text-[10px] text-slate-400 bg-slate-50 border border-slate-200 px-1.5 py-0.5 rounded-sm w-fit uppercase tracking-wider font-semibold">POST: OFF</span>}
+                </div>
+            )
         },
         {
             id: 'actions',
@@ -316,6 +334,17 @@ export default function Devices() {
                                         <input type="time" value={formWhEnd} onChange={e => setFormWhEnd(e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm bg-white" />
                                     </div>
                                 </div>
+                            </div>
+
+                            <div className="flex items-center gap-6 p-4 bg-white border border-slate-100 rounded-xl">
+                                <label className="flex items-center gap-2.5 text-sm font-bold text-slate-700 cursor-pointer select-none">
+                                    <input type="checkbox" checked={formCreateJsonFile} onChange={e => setFormCreateJsonFile(e.target.checked)} className="w-5 h-5 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 transition-all cursor-pointer accent-emerald-600" />
+                                    Create JSON File
+                                </label>
+                                <label className="flex items-center gap-2.5 text-sm font-bold text-slate-700 cursor-pointer select-none">
+                                    <input type="checkbox" checked={formPostData} onChange={e => setFormPostData(e.target.checked)} className="w-5 h-5 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 transition-all cursor-pointer accent-emerald-600" />
+                                    Post The Data
+                                </label>
                             </div>
 
                             <div className="grid grid-cols-[1fr_auto] gap-4 items-start relative z-0">

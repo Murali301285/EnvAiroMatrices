@@ -40,7 +40,7 @@ export default function Layout({ }: { wsStatus?: string }) {
             if (timeoutId) clearTimeout(timeoutId);
             timeoutId = setTimeout(() => {
                 localStorage.removeItem('env_user');
-                toast.error("Session strictly terminated due to 5 minutes of inactivity.");
+                toast.error("Session time out");
                 navigate('/');
             }, 300000); // 5 minutes strictly
         };

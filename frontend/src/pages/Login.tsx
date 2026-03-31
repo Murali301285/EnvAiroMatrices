@@ -19,7 +19,7 @@ export default function Login() {
         }
 
         setLoading(true);
-        axios.post('http://localhost:8381/admin/login', {
+        axios.post(`http://${window.location.hostname}:8381/admin/login`, {
             loginId: loginId,
             password: password
         }).then(res => {

@@ -20,7 +20,7 @@ export default function Pages() {
 
     const fetchPages = () => {
         setLoading(true);
-        axios.get('http://localhost:8381/admin/pages')
+        axios.get(`http://${window.location.hostname}:8381/admin/pages`)
             .then(res => {
                 if (res.data?.status === 'success') {
                     setPages(res.data.data || []);
@@ -50,8 +50,8 @@ export default function Pages() {
         };
 
         const req = editingId
-            ? axios.put(`http://localhost:8381/admin/pages/${editingId}`, payload)
-            : axios.post('http://localhost:8381/admin/pages', payload);
+            ? axios.put(`http://${window.location.hostname}:8381/admin/pages/${editingId}`, payload)
+            : axios.post(`http://${window.location.hostname}:8381/admin/pages`, payload);
 
         req.then(res => {
             if (res.data.status === 'success') {
@@ -76,7 +76,7 @@ export default function Pages() {
     const handleDelete = (slno: number) => {
         if (!window.confirm("Are you sure you want to delete this page route?")) return;
         setLoading(true);
-        axios.delete(`http://localhost:8381/admin/pages/${slno}`)
+        axios.delete(`http://${window.location.hostname}:8381/admin/pages/${slno}`)
             .then(res => {
                 if (res.data.status === 'success') {
                     toast.success("Page route deleted successfully!");

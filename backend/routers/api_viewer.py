@@ -9,7 +9,7 @@ def get_top_2000_data():
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT * FROM tblDatareceiver ORDER BY receivedOn DESC LIMIT 2000")
+            cursor.execute("SELECT * FROM tblDatareceiver ORDER BY receivedOn DESC LIMIT 5000")
             result = cursor.fetchall()
             return {"status": "success", "data": result}
     except Exception as e:
@@ -23,7 +23,7 @@ def get_view_records():
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT deviceid, revText, receivedOn FROM tblDatareceiverHistory ORDER BY receivedOn DESC LIMIT 1000")
+            cursor.execute("SELECT deviceid, revText, TO_CHAR(receivedOn, 'DD-MM-YYYY HH12:MI:SS AM') AS receivedOn FROM tblDatareceiverHistory ORDER BY slno DESC LIMIT 5000")
             result = cursor.fetchall()
             return {"status": "success", "count": len(result), "data": result}
     except Exception as e:
@@ -54,7 +54,7 @@ def get_dashboard_device_params(deviceid: str):
     try:
         with conn.cursor() as cursor:
             query = """
-                SELECT p.parameterName, p.labelName, p.param_tag, p.color, p.unit, m.api_rev_tag 
+                SELECT p.parameterName, p.labelName, p.param_tag, p.color, p.unit, p.DataType, p.DecimalPlaces, p.ValueFactor, m.api_rev_tag 
                 FROM tblDeviceParameterMapping m 
                 JOIN tblParameterMaster p ON m.parameter_id = p.slno 
                 WHERE m.deviceid = %s AND m.api_rev_tag IS NOT NULL AND m.api_rev_tag != ''
@@ -97,11 +97,36 @@ def get_dashboard_telemetry(
             cursor.execute(query, tuple(params))
             results = cursor.fetchall()
             
+            # Identify distinct logical dates in the fetched subset to pull 00:00:00 reference seeds
+            day_seeds = {}
+            if device_id and results:
+                import datetime
+                target_dates = set()
+                for r in results:
+                    recv = r.get('receivedOn', r.get('receivedon'))
+                    if isinstance(recv, str):
+                        try:
+                            recv = datetime.datetime.fromisoformat(recv.replace('Z', '+00:00').split('.')[0])
+                        except:
+                            recv = None
+                    if recv and isinstance(recv, datetime.datetime):
+                        target_dates.add(recv.date())
+
+                for target_date in target_dates:
+                    start_of_day = datetime.datetime.combine(target_date, datetime.time.min)
+                    seed_query = "SELECT revText FROM tblDatareceiverHistory WHERE deviceid = %s AND receivedOn >= %s ORDER BY receivedOn ASC LIMIT 1"
+                    cursor.execute(seed_query, (device_id, start_of_day))
+                    seed_res = cursor.fetchone()
+                    if seed_res:
+                        rev_text_val = seed_res.get('revText', seed_res.get('revtext'))
+                        day_seeds[target_date.strftime("%Y-%m-%d")] = rev_text_val
+
             # Formulate the response
             return {
                 "status": "success", 
                 "count": len(results),
-                "data": results
+                "data": results,
+                "day_seeds": day_seeds
             }
     except Exception as e:
         return {"status": "error", "message": str(e)}

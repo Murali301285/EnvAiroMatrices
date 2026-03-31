@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
-import { FileJson, Plus, AlertCircle, Edit2, Trash2, X, Braces } from 'lucide-react';
+import { FileJson, Plus, AlertCircle, Edit2, Trash2, X, Braces, Download } from 'lucide-react';
 import { toast } from 'react-toastify';
 
 export default function Formatters() {
@@ -15,6 +15,14 @@ export default function Formatters() {
     const [formType, setFormType] = useState("Scheduled");
     const [formJson, setFormJson] = useState('{\n  "name": "#Project",\n  "Tag": "$NH3"\n}');
     const [jsonError, setJsonError] = useState<string | null>(null);
+
+    // Test Engine State
+    const [testModalOpen, setTestModalOpen] = useState(false);
+    const [testPayload, setTestPayload] = useState<string>('');
+    const [testDevice, setTestDevice] = useState<string>('');
+    const [testError, setTestError] = useState<string>('');
+    const [testSqlData, setTestSqlData] = useState<any>(null);
+    const [isTesting, setIsTesting] = useState(false);
 
     useEffect(() => {
         if (!formJson.trim()) {
@@ -31,7 +39,7 @@ export default function Formatters() {
 
     const fetchFormatters = () => {
         setLoading(true);
-        axios.get('http://localhost:8381/admin/formatters')
+        axios.get(`http://${window.location.hostname}:8381/admin/formatters`)
             .then(res => {
                 if (res.data?.status === 'success') {
                     setFormatters(res.data.data || []);
@@ -76,8 +84,8 @@ export default function Formatters() {
         };
 
         const req = editingId
-            ? axios.put(`http://localhost:8381/admin/formatters/${editingId}`, payload)
-            : axios.post('http://localhost:8381/admin/formatters', payload);
+            ? axios.put(`http://${window.location.hostname}:8381/admin/formatters/${editingId}`, payload)
+            : axios.post(`http://${window.location.hostname}:8381/admin/formatters`, payload);
 
         req.then(res => {
             if (res.data.status === 'success') {
@@ -99,10 +107,32 @@ export default function Formatters() {
         setIsAddModalOpen(true);
     };
 
+    const triggerTest = (slno: number) => {
+        setTestModalOpen(true);
+        setIsTesting(true);
+        setTestError('');
+        setTestPayload('');
+        setTestDevice('');
+        setTestSqlData(null);
+
+        axios.post(`http://${window.location.hostname}:8381/admin/formatters/test-json`, { slno })
+            .then(res => {
+                if (res.data.status === 'success') {
+                    setTestPayload(res.data.payload);
+                    setTestDevice(res.data.device_used);
+                    setTestSqlData(res.data.sql_data);
+                } else {
+                    setTestError(res.data.message || 'Unknown Template Execution Error');
+                }
+            })
+            .catch(err => setTestError(err.message || 'Network Execution Error'))
+            .finally(() => setIsTesting(false));
+    };
+
     const handleDelete = (slno: number) => {
         if (!window.confirm("Are you sure you want to delete this payload template?")) return;
         setLoading(true);
-        axios.delete(`http://localhost:8381/admin/formatters/${slno}`)
+        axios.delete(`http://${window.location.hostname}:8381/admin/formatters/${slno}`)
             .then(res => {
                 if (res.data.status === 'success') {
                     toast.success("Payload template deleted successfully.");
@@ -245,8 +275,9 @@ export default function Formatters() {
                                             </div>
                                         </div>
                                         <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                            <button onClick={() => handleEdit(f)} className="p-1.5 text-slate-400 hover:text-emerald-500 rounded hover:bg-emerald-50"><Edit2 size={16} /></button>
-                                            <button onClick={() => handleDelete(f.slno)} className="p-1.5 text-slate-400 hover:text-rose-500 rounded hover:bg-rose-50"><Trash2 size={16} /></button>
+                                            <button onClick={() => triggerTest(f.slno)} className="p-1.5 text-slate-400 hover:text-sky-500 rounded hover:bg-sky-50" title="Test & Validate JSON"><Braces size={16} /></button>
+                                            <button onClick={() => handleEdit(f)} className="p-1.5 text-slate-400 hover:text-emerald-500 rounded hover:bg-emerald-50" title="Edit Template"><Edit2 size={16} /></button>
+                                            <button onClick={() => handleDelete(f.slno)} className="p-1.5 text-slate-400 hover:text-rose-500 rounded hover:bg-rose-50" title="Delete"><Trash2 size={16} /></button>
                                         </div>
                                     </div>
                                     <div className="px-5 py-3 border-b border-slate-100 bg-teal-50/30">
@@ -264,6 +295,105 @@ export default function Formatters() {
                     </div>
                 )}
             </div>
+
+            {/* Test Payload Engine Modal */}
+            {testModalOpen && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md animate-in fade-in duration-200">
+                    <div className="bg-[#1E1E1E] rounded-2xl shadow-2xl w-full max-w-4xl overflow-hidden animate-in zoom-in-95 duration-200 flex flex-col border border-slate-700">
+                        <div className="px-6 py-4 border-b border-slate-700 flex items-center justify-between shrink-0">
+                            <div>
+                                <h3 className="text-lg font-bold text-slate-200 flex items-center gap-2">
+                                    <Braces size={18} className="text-sky-400" /> Test & Validate JSON
+                                </h3>
+                                <p className="text-xs text-slate-400 mt-1">
+                                    Simulating against active edge device <span className="text-sky-400 font-mono bg-sky-400/10 px-1 py-0.5 rounded">{testDevice || '...'}</span>
+                                </p>
+                            </div>
+                            <button onClick={() => setTestModalOpen(false)} className="text-slate-400 hover:text-white transition-colors p-1 rounded-lg hover:bg-slate-700">
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        <div className="p-6 overflow-y-auto max-h-[70vh] flex-1">
+                            {isTesting ? (
+                                <div className="flex flex-col items-center justify-center py-12 text-slate-400 gap-3">
+                                    <AlertCircle size={32} className="animate-pulse text-sky-400" />
+                                    <span className="text-sm font-semibold tracking-wide">Compiling Stored Procedure Variables...</span>
+                                </div>
+                            ) : testError ? (
+                                <div className="bg-rose-500/10 border border-rose-500/20 rounded-xl p-6 text-rose-400 font-mono text-sm leading-relaxed">
+                                    <div className="font-bold mb-2 flex items-center gap-2 text-rose-300">
+                                        <AlertCircle size={16} /> SQL Execution Error
+                                    </div>
+                                    {testError}
+                                </div>
+                            ) : (
+                                <div className="space-y-4">
+                                    {testSqlData && Object.keys(testSqlData).length > 0 && (
+                                        <div className="bg-[#0D0D0D] rounded-xl border border-slate-800 p-4">
+                                            <div className="flex items-center gap-2 mb-3">
+                                                <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
+                                                <h4 className="text-indigo-400 font-bold text-xs uppercase tracking-widest font-mono">SQL Database Result Map</h4>
+                                            </div>
+                                            <div className="overflow-x-auto">
+                                                <table className="w-full text-left text-xs font-mono border-collapse">
+                                                    <thead>
+                                                        <tr className="border-b border-slate-800 text-slate-500">
+                                                            <th className="pb-2 font-semibold">Key</th>
+                                                            <th className="pb-2 font-semibold">Evaluated Value</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-slate-800/60">
+                                                        {Object.entries(testSqlData).map(([key, val]) => (
+                                                            <tr key={key} className="hover:bg-slate-800/30 transition-colors">
+                                                                <td className="py-2 text-indigo-300 pr-4">{key}</td>
+                                                                <td className="py-2 text-slate-300 break-all">{String(val)}</td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <div className="bg-[#0D0D0D] rounded-xl border border-slate-800 p-4 relative">
+                                        <div className="flex items-center justify-between mb-3">
+                                            <div className="flex items-center gap-2">
+                                                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                                                <h4 className="text-emerald-400 font-bold text-xs uppercase tracking-widest font-mono">Final Pre-Transmitted JSON Payload</h4>
+                                            </div>
+                                            <button 
+                                                onClick={() => {
+                                                    const blob = new Blob([testPayload], { type: 'application/json' });
+                                                    const url = URL.createObjectURL(blob);
+                                                    const a = document.createElement('a');
+                                                    a.href = url;
+                                                    a.download = `${testDevice || 'payload_test_data'}.json`;
+                                                    a.click();
+                                                    URL.revokeObjectURL(url);
+                                                    toast.success("JSON Configuration Downloaded!");
+                                                }}
+                                                className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 hover:bg-emerald-500/20 text-emerald-400 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
+                                            >
+                                                <Download size={14} /> Download JSON
+                                            </button>
+                                        </div>
+                                        <pre className="text-sky-300 font-mono text-sm leading-relaxed whitespace-pre-wrap">
+                                            {testPayload}
+                                        </pre>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="px-6 py-4 border-t border-slate-700 bg-slate-800/50 flex justify-end shrink-0">
+                            <button onClick={() => setTestModalOpen(false)} className="px-5 py-2 text-sm font-medium text-white bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors">
+                                Close Terminal
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

@@ -13,6 +13,20 @@ DB_RETENTION_DAYS = 2   # Delete DB records older than 2 days
 
 def _parse_template(template_str, sp_name, deviceid):
     try:
+        # 1. Fetch live mapping data natively from Stored Procedure logic bounds
+        from database import get_db_connection
+        conn = get_db_connection()
+        db_context = {}
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(f"SELECT * FROM {sp_name}(%s)", (deviceid,))
+                result = cursor.fetchone()
+                if result: db_context = dict(result)
+        except Exception as e:
+            print(f"STORED_PROCEDURE Execution Error ({sp_name}): {e}")
+        finally:
+            if conn: conn.close()
+
         data = json.loads(template_str)
         
         def traverse(obj):
@@ -24,15 +38,24 @@ def _parse_template(template_str, sp_name, deviceid):
                 if obj.startswith('#'):
                     return obj[1:]  # Return raw text without #
                 elif obj.startswith('$'):
-                    # Simulated stored procedure output mapping
                     tag_name = obj[1:]
-                    return f"SIMULATED_{tag_name}"
+                    # Soft map to SP columns case selectively (e.g. client, location...)
+                    val = db_context.get(tag_name)
+                    if val is None: val = db_context.get(tag_name.lower())
+                    if val is not None:
+                        import decimal
+                        if isinstance(val, decimal.Decimal):
+                            return int(val) if val % 1 == 0 else float(val)
+                        return val
+                    
+                    return f"NOT_FOUND_{tag_name}"
                 return obj
             return obj
             
         parsed_data = traverse(data)
-        return json.dumps(parsed_data)
-    except:
+        return json.dumps(parsed_data, indent=2)
+    except Exception as e:
+        print(f"Template parsing failed: {e}")
         return template_str
 
 def orchestrate_json_payloads():
@@ -50,24 +73,46 @@ def orchestrate_json_payloads():
             for row in unprocessed:
                 slno = row['slno']
                 dev_id = row['deviceid']
-                raw_text = row['revText']
                 
-                # Fetch formatter for device
-                cursor.execute("SELECT f.jsonTemplate, f.storedProcedureName FROM tblDeviceJsonMapping m JOIN tblJsonFormatter f ON m.scheduledJsonId = f.slno WHERE m.deviceid=%s", (dev_id,))
+                # Fetch formatter securely inheriting via Company definition && Check Output Folder Name
+                cursor.execute("""
+                    SELECT f.jsonTemplate, f.storedProcedureName, m.folder_name, dm.create_json_file
+                    FROM tblDeviceMaster dm
+                    JOIN tblDeviceJsonMapping m ON dm.customer_code = m.customer_code
+                    JOIN tblJsonFormatter f ON m.scheduledJsonId = f.slno 
+                    WHERE dm.deviceid=%s AND f.isDeleted=0
+                """, (dev_id,))
                 formatter = cursor.fetchone()
                 
-                if formatter and formatter['jsonTemplate']:
-                    template = formatter['jsonTemplate']
-                    sp_name = formatter['storedProcedureName']
+                if formatter and (formatter.get('jsontemplate') or formatter.get('jsonTemplate')):
+                    template = formatter.get('jsontemplate') or formatter.get('jsonTemplate')
+                    sp_name = formatter.get('storedprocedurename') or formatter.get('storedProcedureName')
+                    folder_name = formatter.get('folder_name') or ''
+                    create_json_file = formatter.get('create_json_file')
                     
-                    # Simulated parsing #Tags (static text overrides) and $Tags (SP results)
-                    # For ex-> "name" :'#Project', "Tag":"$NH3"
-                    result_payload = _parse_template(template, sp_name, dev_id)
-                    
-                    # Push to Staging URL (Simulated target mapped config)
-                    cursor.execute("INSERT INTO tblDeadLetterQueue (deviceid, payload, targetUrl) VALUES (%s, %s, %s)", 
-                                  (dev_id, result_payload, "https://api.external.com/submit"))
-                                  
+                    if sp_name:
+                        # Simulated parsing #Tags (static text overrides) and $Tags (SP results)
+                        result_payload = _parse_template(template, sp_name, dev_id)
+                        
+                        # Write JSON Locally as Requested
+                        if create_json_file and folder_name and folder_name.strip():
+                            try:
+                                base_dir = os.path.dirname(os.path.abspath(__file__))
+                                clean_folder = folder_name.strip().replace('\\', '/').lstrip('/')
+                                target_dir = os.path.join(base_dir, clean_folder)
+                                os.makedirs(target_dir, exist_ok=True)
+                                
+                                safe_dt = datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")
+                                f_path = os.path.join(target_dir, f"{dev_id.replace('+', '').replace(':', '')}_{safe_dt}_sch.json")
+                                with open(f_path, 'w') as fh:
+                                    fh.write(result_payload)
+                            except Exception as file_err:
+                                print(f"Local Store ERROR: {file_err}")
+
+                        # Push to Dead letter Queue target
+                        cursor.execute("INSERT INTO tblDeadLetterQueue (deviceid, payload, targetUrl) VALUES (%s, %s, %s)", 
+                                      (dev_id, result_payload, "https://api.external.com/submit"))
+                                      
                 # Mark as processed
                 cursor.execute("UPDATE tblDatareceiver SET isProcessed=1, processedOn=NOW() WHERE slno=%s", (slno,))
             conn.commit()
@@ -120,8 +165,8 @@ def aggregate_minute_data():
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
-            # 1. Fetch unaggregated rows
-            cursor.execute("SELECT slno, deviceid, revtext, receivedon FROM tblDatareceiver WHERE isAggregated=0 ORDER BY receivedon ASC LIMIT 500")
+            # 1. Fetch unaggregated rows natively capping at fully elapsed minutes exactly preventing mid-minute incomplete overlaps mathematically gracefully properly explicitly securely cleanly gracefully explicitly.
+            cursor.execute("SELECT slno, deviceid, revtext, receivedon FROM tblDatareceiver WHERE isAggregated=0 AND receivedon < DATE_TRUNC('minute', NOW()) ORDER BY receivedon ASC LIMIT 500")
             unaggregated = cursor.fetchall()
             
             if not unaggregated:
@@ -165,13 +210,16 @@ def aggregate_minute_data():
             # Mathematical Aggregation logic
             for dev_id, blocks in grouped_data.items():
                 cursor.execute("""
-                    SELECT m.api_rev_tag, p.valueFactor, p.datatype, p.decimalplaces
+                    SELECT m.api_rev_tag, p.valueFactor, p.datatype, p.decimalplaces, p.labelName, p.status_conditions
                     FROM tblDeviceParameterMapping m 
                     JOIN tblParameterMaster p ON m.parameter_id = p.slno 
                     WHERE m.deviceid = %s AND m.isDeleted = 0 AND p.status = 1
                 """, (dev_id,))
                 
                 mappings = cursor.fetchall()
+                
+                # Cache for start-of-day values for SUM logic: (dev_id, date_obj, tag_upper) -> float
+                start_of_day_cache = {}
                 
                 for minute_block, records in blocks.items():
                     minute_metrics = {}
@@ -198,13 +246,27 @@ def aggregate_minute_data():
                             metric_val = None
                             # Separate numerics for mathematical safety
                             numeric_vals = [v for v in values if isinstance(v, (int, float))]
-                            
-                            if v_factor in ['AVG', 'SUM']:
+                            if tag in ['IN', 'OUT']:
+                                if numeric_vals:
+                                    current_max = max(numeric_vals)
+                                    current_min = min(numeric_vals)
+                                    metric_val = max(0, round(current_max - current_min, 2))
+                                    minute_metrics[f"{tag}_RAW"] = current_max
+                                else:
+                                    metric_val = 0
+                            elif v_factor in ['AVG', 'SUM']:
                                 if numeric_vals:
                                     if v_factor == 'AVG':
                                         metric_val = round(sum(numeric_vals) / len(numeric_vals), 2)
-                                    else: # SUM is differential
-                                        metric_val = round(max(numeric_vals) - min(numeric_vals), 2)
+                                    else: # SUM is Daily Cumulative
+                                        current_max = max(numeric_vals)
+                                        current_min = min(numeric_vals)
+                                        
+                                        # Strict Delta for the exact given minute (Max-Min trick requested by user)
+                                        metric_val = max(0, round(current_max - current_min, 2))
+                                        
+                                        # Automatically store the RAW anchor transparently in the background for PCD calculation perfectly
+                                        minute_metrics[f"{tag}_RAW"] = current_max
                             elif v_factor == 'MAX':
                                 metric_val = max(numeric_vals) if numeric_vals else max(values)
                             elif v_factor == 'MIN':
@@ -239,12 +301,52 @@ def aggregate_minute_data():
                                     metric_val = str(metric_val)
 
                                 minute_metrics[tag_raw] = metric_val
+
+                                # Evaluate Logical Parameter Bounds cleanly
+                                conds_raw = mapping.get('status_conditions')
+                                label_name = mapping.get('labelname')
+
+                                if conds_raw and label_name:
+                                    conds = []
+                                    if isinstance(conds_raw, str):
+                                        try:
+                                            conds = json.loads(conds_raw)
+                                        except: pass
+                                    else:
+                                        conds = conds_raw
+                                    
+                                    status_met = None
+                                    for c in conds:
+                                        try:
+                                            v1 = float(c.get('val1', 0))
+                                            v2 = float(c.get('val2', 0) if c.get('val2') is not None else 0.0)
+                                            op = c.get('operator')
+                                            label = c.get('label')
+                                            
+                                            mv = float(metric_val) # Compare cleanly mathematically
+                                            
+                                            if op == '<' and mv < v1: status_met = label
+                                            elif op == '<=' and mv <= v1: status_met = label
+                                            elif op == '=' and mv == v1: status_met = label
+                                            elif op == '>=' and mv >= v1: status_met = label
+                                            elif op == '>' and mv > v1: status_met = label
+                                            elif op == 'BETWEEN' and min(v1, v2) <= mv <= max(v1, v2): status_met = label
+                                            
+                                            if status_met:
+                                                break
+                                        except (ValueError, TypeError): 
+                                            pass
+                                            
+                                    if status_met:
+                                        minute_metrics[f"{label_name} Status"] = status_met
                     
                     if minute_metrics:
-                        # Insert into tblMinuteDetails
+                        # Insert into tblMinuteDetails with single-row structural Upsert mapping gracefully
                         cursor.execute("""
                             INSERT INTO tblMinuteDetails (deviceid, minute_date, minute_time, metrics) 
                             VALUES (%s, %s, %s, %s)
+                            ON CONFLICT (deviceid, minute_date, minute_time) 
+                            DO UPDATE SET metrics = EXCLUDED.metrics
                         """, (
                             dev_id, 
                             minute_block.date(), 

@@ -25,7 +25,7 @@ export default function App() {
   const [latestData, setLatestData] = useState<string>("Awaiting IoT payload...");
 
   useEffect(() => {
-    const ws = new WebSocket('ws://localhost:8381/ws');
+    const ws = new WebSocket(`ws://${window.location.hostname}:8381/ws`);
 
     ws.onopen = () => {
       setDbStatus("Connected");

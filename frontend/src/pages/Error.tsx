@@ -9,7 +9,7 @@ export default function Error() {
 
     const fetchErrors = () => {
         setLoading(true);
-        axios.get('http://localhost:8381/admin/logs/errors')
+        axios.get(`http://${window.location.hostname}:8381/admin/logs/errors`)
             .then(res => {
                 if (res.data?.status === 'success') {
                     setErrors(res.data.data || []);

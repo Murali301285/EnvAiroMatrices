@@ -26,9 +26,13 @@ export default function Parameters() {
     const [formDataType, setFormDataType] = useState("Decimal");
     const [formDecimalPlaces, setFormDecimalPlaces] = useState<number>(2);
 
+    // Dynamic Condition Builder state
+    const [formHasConditions, setFormHasConditions] = useState(false);
+    const [formConditions, setFormConditions] = useState<any[]>([]);
+
     const fetchParameters = () => {
         setLoading(true);
-        axios.get('http://localhost:8381/admin/parameters')
+        axios.get(`http://${window.location.hostname}:8381/admin/parameters`)
             .then(res => {
                 if (res.data?.status === 'success') {
                     setParameters(res.data.data || []);
@@ -60,6 +64,52 @@ export default function Parameters() {
             return;
         }
 
+        if (formHasConditions) {
+            if (formConditions.length === 0) {
+                toast.error("Please add at least one condition or disable the Status Conditions toggle.");
+                return;
+            }
+            
+            // Check for empty labels
+            if (formConditions.some(c => !c.label.trim())) {
+                toast.error("Condition status labels cannot be empty.");
+                return;
+            }
+
+            // Uniqueness logic validation
+            const names = formConditions.map(c => c.label.toLowerCase().trim());
+            if (new Set(names).size !== names.length) {
+                toast.error("Status names must be physically unique!");
+                return;
+            }
+
+            // Mathematical Range Overlap Collision Detection
+            const ranges = formConditions.map(c => {
+                let v1 = parseFloat(c.val1);
+                let v2 = parseFloat(c.val2);
+                let min = -Infinity;
+                let max = Infinity;
+                if(c.operator === '<') { max = v1 - 0.000001; }
+                if(c.operator === '<=') { max = v1; }
+                if(c.operator === '>') { min = v1 + 0.000001; }
+                if(c.operator === '>=') { min = v1; }
+                if(c.operator === '=') { min = v1; max = v1; }
+                if(c.operator === 'BETWEEN') { min = Math.min(v1, v2); max = Math.max(v1, v2); }
+                return { label: c.label, min, max };
+            });
+
+            for(let i=0; i<ranges.length; i++) {
+                for(let j=i+1; j<ranges.length; j++) {
+                    const r1 = ranges[i];
+                    const r2 = ranges[j];
+                    if (Math.max(r1.min, r2.min) <= Math.min(r1.max, r2.max)) {
+                        toast.error(`Error: Mathematical range collision! Condition "${r1.label}" overlaps with "${r2.label}". Please adjust bounds.`);
+                        return;
+                    }
+                }
+            }
+        }
+
         setSaving(true);
         const payload = {
             parameterName: formName,
@@ -72,12 +122,13 @@ export default function Parameters() {
             inputField: formConversion === "NA" ? null : formInputValue,
             status: formStatus ? 1 : 0,
             datatype: formDataType,
-            decimalplaces: formDataType === 'Decimal' ? formDecimalPlaces : null
+            decimalplaces: formDataType === 'Decimal' ? formDecimalPlaces : null,
+            status_conditions: formHasConditions ? formConditions : []
         };
 
         const req = editingId
-            ? axios.put(`http://localhost:8381/admin/parameters/${editingId}`, payload)
-            : axios.post('http://localhost:8381/admin/parameters', payload);
+            ? axios.put(`http://${window.location.hostname}:8381/admin/parameters/${editingId}`, payload)
+            : axios.post(`http://${window.location.hostname}:8381/admin/parameters`, payload);
 
         req.then(res => {
             if (res.data.status === 'success') {
@@ -103,6 +154,11 @@ export default function Parameters() {
         setFormStatus(row.status === 1);
         setFormDataType(row.datatype || "Decimal");
         setFormDecimalPlaces(row.decimalplaces !== null ? row.decimalplaces : 2);
+        
+        const conds = typeof row.status_conditions === 'string' ? JSON.parse(row.status_conditions || '[]') : (row.status_conditions || []);
+        setFormHasConditions(conds.length > 0);
+        setFormConditions(conds);
+        
         setEditingId(row.slno);
         setIsAddModalOpen(true);
     };
@@ -110,7 +166,7 @@ export default function Parameters() {
     const handleDelete = (slno: number) => {
         if (!window.confirm("Are you sure you want to delete this parameter?")) return;
         setLoading(true);
-        axios.delete(`http://localhost:8381/admin/parameters/${slno}`)
+        axios.delete(`http://${window.location.hostname}:8381/admin/parameters/${slno}`)
             .then(res => {
                 if (res.data.status === 'success') {
                     toast.success("Parameter removed successfully!");
@@ -131,6 +187,8 @@ export default function Parameters() {
         setFormConversion("NA"); setFormValueFactor("Avg"); setFormInputValue("");
         setFormStatus(true);
         setFormDataType("Decimal"); setFormDecimalPlaces(2);
+        setFormHasConditions(false);
+        setFormConditions([]);
     };
 
     const columns = useMemo<ColumnDef<any, any>[]>(() => [
@@ -175,14 +233,31 @@ export default function Parameters() {
         },
         {
             accessorKey: 'datatype',
-            header: 'Format',
+            header: 'Format & Status Logic',
             cell: info => {
                 const type = info.getValue() || 'Decimal';
                 const dec = info.row.original.decimalplaces;
+                const conds = typeof info.row.original.status_conditions === 'string' 
+                                ? JSON.parse(info.row.original.status_conditions || '[]') 
+                                : (info.row.original.status_conditions || []);
+                                
                 return (
-                    <span className="text-xs font-semibold text-slate-600 bg-slate-100 px-2 py-1 rounded border border-slate-200 shadow-sm tracking-wide">
-                        {type}{type === 'Decimal' && dec !== null && ` (${dec})`}
-                    </span>
+                    <div className="flex flex-col gap-1 items-start">
+                        <span className="text-[10px] font-bold uppercase text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                            {type}{type === 'Decimal' && dec !== null && ` (${dec})`}
+                        </span>
+                        {conds && conds.length > 0 ? (
+                            <div className="flex flex-wrap gap-1 mt-1">
+                                {conds.map((c: any, i: number) => (
+                                    <span key={i} className="text-[9px] font-bold text-sky-700 bg-sky-50 px-1.5 py-0.5 rounded border border-sky-100 uppercase tracking-widest" title={`${c.operator} ${c.operator === 'BETWEEN' ? c.val1 + '-' + c.val2 : c.val1}`}>
+                                        {c.label}
+                                    </span>
+                                ))}
+                            </div>
+                        ) : (
+                            <span className="text-[10px] italic text-slate-400 mt-1 uppercase">Native Values (No Ranges)</span>
+                        )}
+                    </div>
                 );
             }
         },
@@ -360,6 +435,108 @@ export default function Parameters() {
                                         <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${formStatus ? 'translate-x-6' : 'translate-x-1'}`} />
                                     </button>
                                 </div>
+                            </div>
+
+                            <div className="p-4 bg-slate-100/50 border border-slate-200 rounded-xl space-y-4 shadow-inner relative overflow-hidden">
+                                <div className="absolute top-0 right-0 w-32 h-32 bg-sky-500/5 rounded-full blur-3xl"></div>
+                                <div className="flex items-center justify-between border-b border-slate-200/60 pb-3 relative z-10">
+                                    <div>
+                                        <h4 className="text-sm font-bold text-slate-800 flex items-center gap-2 tracking-tight">
+                                            Status Conditions Matrix
+                                        </h4>
+                                        <p className="text-xs text-slate-500 mt-0.5 font-medium">Dynamically map physical threshold boundaries.</p>
+                                    </div>
+                                    <button
+                                        onClick={() => setFormHasConditions(!formHasConditions)}
+                                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 shadow-sm ${formHasConditions ? 'bg-sky-500' : 'bg-slate-300'}`}
+                                    >
+                                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${formHasConditions ? 'translate-x-6' : 'translate-x-1'}`} />
+                                    </button>
+                                </div>
+
+                                {formHasConditions ? (
+                                    <div className="space-y-3 relative z-10">
+                                        <div className="bg-white border text-left border-sky-100 rounded-lg shadow-sm p-4 space-y-3 flex flex-col items-center">
+                                            {formConditions.length === 0 && (
+                                                <div className="text-sm font-semibold text-slate-400 my-4 uppercase tracking-widest text-center">No logic paths defined.</div>
+                                            )}
+                                            {formConditions.map((cond, idx) => (
+                                                <div key={idx} className="flex items-center gap-2 w-full p-2 bg-slate-50 border border-slate-100 rounded-lg hover:shadow-md transition-shadow">
+                                                    <input 
+                                                        type="text" 
+                                                        value={cond.label} 
+                                                        onChange={e => {
+                                                            const arr = [...formConditions];
+                                                            arr[idx].label = e.target.value;
+                                                            setFormConditions(arr);
+                                                        }} 
+                                                        placeholder="Label (GOOD)" 
+                                                        className="w-1/4 px-2 py-1.5 text-xs font-bold border rounded outline-none focus:ring-2 focus:ring-sky-500 uppercase tracking-widest bg-white"
+                                                    />
+                                                    <select 
+                                                        value={cond.operator}
+                                                        onChange={e => {
+                                                            const arr = [...formConditions];
+                                                            arr[idx].operator = e.target.value;
+                                                            setFormConditions(arr);
+                                                        }}
+                                                        className="w-1/4 px-2 py-1.5 text-xs font-bold font-mono text-indigo-700 bg-indigo-50 border border-indigo-200 rounded outline-none focus:ring-2 focus:ring-indigo-500"
+                                                    >
+                                                        <option value="<">&lt; Less Than</option>
+                                                        <option value="<=">&lt;= Less/Eq</option>
+                                                        <option value="=">= Equal</option>
+                                                        <option value=">">&gt; Greater</option>
+                                                        <option value=">=">&gt;= Great/Eq</option>
+                                                        <option value="BETWEEN">BETWEEN</option>
+                                                    </select>
+                                                    <input 
+                                                        type="number" 
+                                                        value={cond.val1 ?? ''}
+                                                        onChange={e => {
+                                                            const arr = [...formConditions];
+                                                            arr[idx].val1 = e.target.value;
+                                                            setFormConditions(arr);
+                                                        }}
+                                                        placeholder="Val 1" 
+                                                        className="w-1/5 px-2 py-1.5 text-xs font-mono font-bold border border-slate-200 rounded outline-none focus:ring-2 focus:ring-sky-500"
+                                                    />
+                                                    <input 
+                                                        type="number" 
+                                                        value={cond.val2 ?? ''}
+                                                        disabled={cond.operator !== 'BETWEEN'}
+                                                        onChange={e => {
+                                                            const arr = [...formConditions];
+                                                            arr[idx].val2 = e.target.value;
+                                                            setFormConditions(arr);
+                                                        }}
+                                                        placeholder="Val 2" 
+                                                        className={`w-1/5 px-2 py-1.5 text-xs font-mono font-bold border border-slate-200 rounded outline-none transition-opacity focus:ring-2 focus:ring-sky-500 ${cond.operator !== 'BETWEEN' ? 'opacity-30 bg-slate-100' : 'bg-white'}`}
+                                                    />
+                                                    <button 
+                                                        onClick={() => {
+                                                            const arr = formConditions.filter((_, i) => i !== idx);
+                                                            setFormConditions(arr);
+                                                        }}
+                                                        className="p-1.5 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded"
+                                                        title="Remove Condition"
+                                                    >
+                                                        <Trash2 size={14} />
+                                                    </button>
+                                                </div>
+                                            ))}
+                                            <button 
+                                                onClick={() => setFormConditions([...formConditions, { label: '', operator: 'BETWEEN', val1: 0, val2: 100 }])}
+                                                className="mt-2 text-xs font-bold text-sky-600 bg-sky-50 hover:bg-sky-100 px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1 border border-sky-200 shadow-sm"
+                                            >
+                                                <Plus size={14} /> Matrix Logic Row
+                                            </button>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="bg-white/50 border border-slate-200/50 border-dashed rounded-lg p-3 text-center relative z-10">
+                                        <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Logic Generation Subsystem Offline (NA)</p>
+                                    </div>
+                                )}
                             </div>
 
                         </div>
