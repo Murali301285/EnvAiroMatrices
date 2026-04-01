@@ -18,6 +18,7 @@ import JsonMapping from './pages/JsonMapping';
 import Scheduler from './pages/Scheduler';
 import ErrorPage from './pages/Error';
 import Events from './pages/Events';
+import Alerts from './pages/Alerts';
 import Login from './pages/Login';
 
 export default function App() {
@@ -63,6 +64,7 @@ export default function App() {
           <Route path="/param-mapping" element={<ParamMapping />} />
           <Route path="/json-mapping" element={<JsonMapping />} />
           <Route path="/scheduler" element={<Scheduler />} />
+          <Route path="/alerts" element={<Alerts />} />
           <Route path="/error" element={<ErrorPage />} />
           <Route path="/events" element={<Events />} />
         </Route>

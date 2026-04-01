@@ -4,7 +4,7 @@ import {
     Menu, Search, Bell, Mail,
     LayoutDashboard, Users, HardDrive, Settings,
     FileJson, ChevronDown, ChevronRight,
-    Zap, Shield, Code, List, Calendar, AlertTriangle, Radio
+    Zap, Shield, Code, List, Calendar, AlertTriangle, Radio, Activity
 } from 'lucide-react';
 import { toast } from './utils/toast';
 
@@ -94,6 +94,7 @@ export default function Layout({ }: { wsStatus?: string }) {
         {
             title: 'Logs',
             items: [
+                { name: 'Alert Monitor', path: '/alerts', icon: <Activity size={18} /> },
                 { name: 'Error', path: '/error', icon: <AlertTriangle size={18} /> },
                 { name: 'Events', path: '/events', icon: <Radio size={18} /> },
             ]

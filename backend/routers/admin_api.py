@@ -65,6 +65,31 @@ def execute_query(query: str, params: tuple = (), fetchResult: bool = True):
         if conn:
             conn.close()
 
+# ----- ALERTS -----
+@router.get("/alerts")
+def get_alerts(from_date: str = None, to_date: str = None):
+    query = """
+        SELECT slno, Deviceid, param_tag, 
+               TO_CHAR(Createdon, 'YYYY-MM-DD HH24:MI:SS') as "Createdon", 
+               AlertSequence, 
+               TO_CHAR(LastRunOn, 'YYYY-MM-DD HH24:MI:SS') as "LastRunOn", 
+               consucutive_minutes, isResolved, 
+               TO_CHAR(ResolvedOn, 'YYYY-MM-DD HH24:MI:SS') as "ResolvedOn", 
+               Time_taken 
+        FROM tblAlertScheduler
+        WHERE 1=1
+    """
+    params = []
+    if from_date:
+        query += " AND DATE(Createdon) >= %s"
+        params.append(from_date)
+    if to_date:
+        query += " AND DATE(Createdon) <= %s"
+        params.append(to_date)
+        
+    query += " ORDER BY slno DESC LIMIT 100"
+    return execute_query(query, tuple(params))
+
 # ----- CUSTOMERS -----
 @router.get("/customers")
 def get_customers():
