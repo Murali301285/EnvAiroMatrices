@@ -54,8 +54,8 @@ export default function Parameters() {
             return;
         }
 
-        if (formTag.length > 6) {
-            toast.error("Tag must be max 6 characters!");
+        if (formTag.length > 20) {
+            toast.error("Tag must be max 20 characters!");
             return;
         }
 
@@ -349,8 +349,8 @@ export default function Parameters() {
                                 </div>
                                 <div className="flex gap-4">
                                     <div className="flex-1">
-                                        <label className="block text-sm font-medium text-slate-700 mb-1">Tag (Max 6) *</label>
-                                        <input value={formTag} onChange={e => setFormTag(e.target.value)} maxLength={6} type="text" className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm font-mono uppercase" placeholder="TEMP" />
+                                        <label className="block text-sm font-medium text-slate-700 mb-1">Mapping Tag (Max 20) *</label>
+                                        <input value={formTag} onChange={e => setFormTag(e.target.value)} maxLength={20} type="text" className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm font-mono uppercase" placeholder="TEMP" />
                                     </div>
                                     <div className="w-20">
                                         <label className="block text-sm font-medium text-slate-700 mb-1">Color</label>

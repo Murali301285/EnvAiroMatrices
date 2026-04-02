@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from contextlib import asynccontextmanager
 
-from routers import iot_receiver, api_viewer, admin_api
+from routers import iot_receiver, api_viewer, admin_api, external_api
 from scheduler import start_schedulers
 from ws_manager import manager
 
@@ -34,6 +34,7 @@ app.add_middleware(
 app.include_router(iot_receiver.router)
 app.include_router(api_viewer.router)
 app.include_router(admin_api.router)
+app.include_router(external_api.router)
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):

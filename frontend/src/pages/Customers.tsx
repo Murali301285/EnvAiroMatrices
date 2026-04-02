@@ -16,6 +16,7 @@ export default function Customers() {
     // Form State
     const [formName, setFormName] = useState("");
     const [formCode, setFormCode] = useState("");
+    const [formLimit, setFormLimit] = useState("");
     const [formDetails, setFormDetails] = useState<{ key: string, value: string }[]>([]);
 
     // Temp Row State
@@ -69,6 +70,7 @@ export default function Customers() {
         const payload = {
             customerName: formName,
             customer_code: formCode,
+            peoplelimit: formLimit ? parseInt(formLimit, 10) : null,
             details: detailsObj,
             createdBy: 'Admin'
         };
@@ -92,6 +94,7 @@ export default function Customers() {
     const handleEdit = (row: any) => {
         setFormName(row.customername || "");
         setFormCode(row.customer_code || "");
+        setFormLimit(row.peoplelimit ? String(row.peoplelimit) : "");
         let detArr: { key: string, value: string }[] = [];
         if (row.details && typeof row.details === 'object') {
             detArr = Object.entries(row.details).map(([k, v]) => ({ key: k, value: String(v) }));
@@ -122,6 +125,7 @@ export default function Customers() {
         setEditingId(null);
         setFormName("");
         setFormCode("");
+        setFormLimit("");
         setFormDetails([]);
     };
 
@@ -137,6 +141,15 @@ export default function Customers() {
             cell: info => (
                 <span className="px-2.5 py-1 bg-teal-50 text-indigo-700 rounded text-xs font-mono font-bold tracking-wide border border-indigo-100">
                     {info.getValue()}
+                </span>
+            )
+        },
+        {
+            accessorKey: 'peoplelimit',
+            header: 'People Threshold',
+            cell: info => (
+                <span className="px-2.5 py-1 bg-amber-50 text-amber-700 rounded text-xs font-bold border border-amber-200">
+                    {info.getValue() || "No Limit"}
                 </span>
             )
         },
@@ -209,7 +222,7 @@ export default function Customers() {
                         </div>
 
                         <div className="p-6 overflow-y-auto flex-1">
-                            <div className="grid grid-cols-2 gap-4 mb-6">
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
                                 <div>
                                     <label className="block text-sm font-medium text-slate-700 mb-1">Customer Name *</label>
                                     <input value={formName} onChange={e => setFormName(e.target.value)} type="text" className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm" placeholder="e.g. Acme Corp" />
@@ -217,6 +230,10 @@ export default function Customers() {
                                 <div>
                                     <label className="block text-sm font-medium text-slate-700 mb-1">Customer Code *</label>
                                     <input value={formCode} onChange={e => setFormCode(e.target.value)} type="text" className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm font-mono" placeholder="ACME01" />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-700 mb-1">Threshold Limit</label>
+                                    <input value={formLimit} onChange={e => setFormLimit(e.target.value)} type="number" className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm font-mono" placeholder="No Limit (empty)" />
                                 </div>
                             </div>
 

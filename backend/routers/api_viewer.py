@@ -132,3 +132,56 @@ def get_dashboard_telemetry(
         return {"status": "error", "message": str(e)}
     finally:
         conn.close()
+
+@router.get("/dashboard/json-history")
+def get_scheduled_json_history(
+    company: str = Query(None),
+    device_id: str = Query(None),
+    from_date: str = Query(None),
+    to_date: str = Query(None),
+    limit: int = Query(100)
+):
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            query = """
+                SELECT h.slno, h.deviceid, h.json_payload, h.created_at, c.customerName
+                FROM tblScheduledJsonHistory h
+                LEFT JOIN tblDeviceMaster d ON h.deviceid = d.deviceid
+                LEFT JOIN tblCustomerMaster c ON d.customer_code = c.customer_code
+                WHERE 1=1
+            """
+            params = []
+            if company:
+                query += " AND c.customerName = %s"
+                params.append(company)
+            if device_id:
+                query += " AND h.deviceid = %s"
+                params.append(device_id)
+            if from_date:
+                query += " AND h.created_at >= %s"
+                params.append(from_date + " 00:00:00")
+            if to_date:
+                query += " AND h.created_at <= %s"
+                params.append(to_date + " 23:59:59")
+                
+            query += " ORDER BY h.created_at DESC LIMIT %s"
+            params.append(limit)
+            
+            cursor.execute(query, tuple(params))
+            results = cursor.fetchall()
+            
+            # Format results gracefully for frontend
+            for r in results:
+                if 'created_at' in r and r['created_at']:
+                    r['created_at'] = r['created_at'].isoformat()
+            
+            return {
+                "status": "success",
+                "data": results
+            }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
+        conn.close()
+

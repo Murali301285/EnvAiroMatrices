@@ -115,6 +115,10 @@ def orchestrate_json_payloads():
                             except Exception as file_err:
                                 print(f"Local Store ERROR: {file_err}")
 
+                        # Push to Scheduled JSON Track Record
+                        cursor.execute("INSERT INTO tblScheduledJsonHistory (deviceid, json_payload) VALUES (%s, %s::jsonb)", 
+                                      (dev_id, result_payload))
+                                      
                         # Push to Dead letter Queue target
                         cursor.execute("INSERT INTO tblDeadLetterQueue (deviceid, payload, targetUrl) VALUES (%s, %s, %s)", 
                                       (dev_id, result_payload, "https://api.external.com/submit"))
@@ -515,9 +519,8 @@ def evaluate_active_alerts():
 
 def start_schedulers():
     scheduler = BackgroundScheduler()
-    scheduler.add_job(orchestrate_json_payloads, 'interval', minutes=1)
-    scheduler.add_job(aggregate_minute_data, 'interval', minutes=1)
-    scheduler.add_job(evaluate_active_alerts, 'interval', minutes=1)
+    scheduler.add_job(orchestrate_json_payloads, 'interval', minutes=15)
+    scheduler.add_job(evaluate_active_alerts, 'interval', minutes=15)
     scheduler.add_job(process_dlq, 'interval', minutes=2)
     scheduler.add_job(db_cleanup_job, 'cron', hour=0, minute=0)
     scheduler.add_job(disk_cleanup_job, 'cron', hour=0, minute=5) # Runs slightly after DB cleanup

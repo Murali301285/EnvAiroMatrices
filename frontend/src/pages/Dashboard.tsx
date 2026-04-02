@@ -77,6 +77,8 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                 .then(res => {
                     if (res.data?.status === 'success') {
                         const params = res.data.data || [];
+                        const sIdx = params.findIndex((p: any) => String(p.parametername).toUpperCase() === 'STATUS');
+                        if (sIdx > -1) params.push(params.splice(sIdx, 1)[0]);
                         setDeviceParams(params);
 
                         // Default all mappings to visible
@@ -114,18 +116,29 @@ export default function Dashboard({ latestData }: { latestData: string }) {
 
     const parseRevText = (text: string) => {
         if (!text) return {};
-        const parts = text.split(',');
+        // Split smartly using lookahead regex to only split commas followed by Key: structure
+        const parts = text.split(/,(?=[a-zA-Z0-9_]+:)/);
         let obj: any = {};
         parts.forEach(p => {
             const splitIdx = p.indexOf(':');
             if (splitIdx > -1) {
-                const k = p.substring(0, splitIdx).trim();
-                const v = p.substring(splitIdx + 1).trim();
+                const k = p.substring(0, splitIdx).trim().toUpperCase();
+                let v = p.substring(splitIdx + 1).trim();
 
-                if (k === 'DT') {
-                    obj[k] = v;
-                } else {
-                    obj[k.toUpperCase()] = isNaN(Number(v)) ? v : Number(v);
+                // Strip trailing garbage from STATUS and ignore embedded commas 
+                if (v.includes('|')) {
+                    v = v.split('|')[0].trim();
+                }
+                
+                // Remove trailing stray commas if any payload ended with ,
+                if (v.endsWith(',')) {
+                    v = v.slice(0, -1).trim();
+                }
+
+                if (k === 'DT') { 
+                    obj[k] = v; 
+                } else { 
+                    obj[k] = isNaN(Number(v)) ? v : Number(v); 
                 }
             }
         });
@@ -159,8 +172,8 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                             slno_ui: idx + 1,
                             receivedOn: row.receivedOn || row.receivedon,
                             DateStr: dObj.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }),
-                            TimeStr: dObj.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }),
-                            DateTimeStr: `${dObj.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })} ${dObj.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}`,
+                            TimeStr: dObj.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false }),
+                            DateTimeStr: `${dObj.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })} ${dObj.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false })}`,
                             DeviceId: row.deviceid || row.deviceId,
                             DeviceName: row.alias || row.deviceid,
                             Location: row.location || '-',
@@ -182,11 +195,13 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                             }
 
                             // Dynamic Decimal/Number Parse Formatting logic
-                            const dtype = dp.datatype || dp.DataType;
-                            if (dtype === 'Decimal' && typeof val === 'number') {
-                                const places = dp.decimalplaces !== undefined ? dp.decimalplaces : (dp.DecimalPlaces !== undefined ? dp.DecimalPlaces : 2);
+                            const dtype = String(dp.datatype || dp.DataType || '').toLowerCase();
+                            if (dtype === 'decimal' && typeof val === 'number') {
+                                let places = dp.decimalplaces != null ? dp.decimalplaces : dp.DecimalPlaces;
+                                places = parseInt(places, 10);
+                                places = isNaN(places) ? 2 : places;
                                 val = Number(val.toFixed(places));
-                            } else if (dtype === 'Number' && typeof val === 'number') {
+                            } else if (dtype === 'number' && typeof val === 'number') {
                                 val = Math.round(val);
                             }
 
@@ -236,16 +251,32 @@ export default function Dashboard({ latestData }: { latestData: string }) {
         }
     };
 
+    const formatDisplayValue = (val: any, dp: any) => {
+        if (val === undefined || val === null || val === '') return '-';
+        if (typeof val === 'number') {
+            const dtype = String(dp.datatype || dp.DataType || '').toLowerCase();
+            if (dtype === 'integer' || dtype === 'number') {
+                return Math.round(val);
+            } else if (dtype === 'decimal') {
+                let places = dp.decimalplaces != null ? dp.decimalplaces : dp.DecimalPlaces;
+                places = parseInt(places, 10);
+                places = isNaN(places) ? 2 : places;
+                return val.toFixed(places);
+            }
+        }
+        return val;
+    };
+
     const handleDownloadExcel = (tableType: 'minute' | 'raw') => {
         let headers: string[] = [];
         let exportData: any[] = [];
         const activeData = tableType === 'minute' ? sortedMinuteData : sortedRawData;
 
         if (tableType === 'minute') {
-            headers = ["Sl No", "Date", "Time", "Device Name", ...deviceParams.map(dp => dp.parametername)];
+            headers = ["Sl No", "Date", "Time", "Device Name", ...deviceParams.map(dp => dp.labelname || dp.parametername)];
             exportData = activeData.map(d => [
                 d.slno_ui, d.DateStr, d.TimeStr, d.DeviceName,
-                ...deviceParams.map(dp => d[dp.parametername])
+                ...deviceParams.map(dp => formatDisplayValue(d[dp.parametername], dp))
             ]);
         } else {
             headers = ["Sl No", "DateTime", "Device Id", "Location", "Raw Data (revText)"];
@@ -336,7 +367,7 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                 >
                     <div className="flex items-center gap-2 text-sm font-bold text-slate-700 uppercase tracking-wide">
                         <Filter size={14} className="text-emerald-500" />
-                        Telemetry Controls
+                        Data Filter
                         {!isFilterOpen && selectedDevice && (
                             <span className="ml-4 text-xs normal-case text-slate-500 font-normal">
                                 {selectedDevice.label} • {dataList.length} rows loaded
@@ -402,6 +433,7 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                                     <option value={500}>500 rows</option>
                                     <option value={1000}>1000 rows</option>
                                     <option value={5000}>5000 rows</option>
+                                    <option value={1000000}>No Limit</option>
                                 </select>
                             </div>
 
@@ -481,26 +513,22 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                             <YAxis orientation="left" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
 
                             <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 20px rgba(0,0,0,0.08)' }} />
-                            <Legend verticalAlign="top" height={40} iconType="plainline" />
+                            <Legend verticalAlign="top" height={40} iconType="plainline" onClick={(e: any) => toggleVisibility(e.dataKey)} wrapperStyle={{ cursor: 'pointer', userSelect: 'none' }} />
 
-                            {/* Dynamically push ALL mapped parameters onto the active line chart if toggled visible */}
-                            {deviceParams.map(dp => {
-                                if (visibleParams[dp.parametername]) {
-                                    return (
-                                        <Line
-                                            key={dp.parametername}
-                                            type="monotone"
-                                            dataKey={dp.parametername}
-                                            name={`${dp.labelname || dp.parametername} ${dp.unit ? `(${dp.unit})` : ''}`}
-                                            stroke={dp.color || '#6366f1'}
-                                            strokeWidth={2}
-                                            dot={false}
-                                            activeDot={{ r: 6, strokeWidth: 0 }}
-                                        />
-                                    );
-                                }
-                                return null;
-                            })}
+                            {/* Dynamically push ALL mapped parameters onto the active line chart */}
+                            {deviceParams.map(dp => (
+                                <Line
+                                    key={dp.parametername}
+                                    type="monotone"
+                                    dataKey={dp.parametername}
+                                    name={`${dp.labelname || dp.parametername} ${dp.unit ? `(${dp.unit})` : ''}`}
+                                    stroke={visibleParams[dp.parametername] ? (dp.color || '#6366f1') : '#cbd5e1'}
+                                    strokeWidth={visibleParams[dp.parametername] ? 2 : 0}
+                                    dot={false}
+                                    activeDot={{ r: 6, strokeWidth: 0 }}
+                                    hide={!visibleParams[dp.parametername]}
+                                />
+                            ))}
                         </LineChart>
                     </ResponsiveContainer>
                 </div>
@@ -540,7 +568,7 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                                 {/* Dynamic Table Columns */}
                                 {deviceParams.map(dp => (
                                     <th key={dp.parametername} onClick={() => handleSortToggle(dp.parametername, 'minute')} className="px-4 py-4 cursor-pointer select-none group hover:bg-slate-100 transition-colors" style={{ color: dp.color || '#475569' }}>
-                                        <div className="flex items-center gap-1.5 break-normal whitespace-nowrap">{dp.parametername} <SortIcon colKey={dp.parametername} config={sortMinute} /></div>
+                                        <div className="flex items-center gap-1.5 break-normal whitespace-nowrap">{dp.labelname || dp.parametername} <SortIcon colKey={dp.parametername} config={sortMinute} /></div>
                                     </th>
                                 ))}
                             </tr>
@@ -561,7 +589,7 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                                                     {d[dp.parametername]}
                                                 </span>
                                             ) : (
-                                                d[dp.parametername] !== undefined ? d[dp.parametername] : '-'
+                                                formatDisplayValue(d[dp.parametername], dp)
                                             )}
                                         </td>
                                     ))}

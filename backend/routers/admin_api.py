@@ -93,14 +93,26 @@ def get_alerts(from_date: str = None, to_date: str = None):
 # ----- CUSTOMERS -----
 @router.get("/customers")
 def get_customers():
-    return execute_query("SELECT slno, customerName, customer_code, details FROM tblCustomerMaster WHERE isDeleted=0")
+    return execute_query("SELECT slno, customerName, customer_code, details, peoplelimit FROM tblCustomerMaster WHERE isDeleted=0")
 
 @router.post("/customers")
 async def add_customer(request: Request):
     payload = await request.json()
     details = json.dumps(payload.get('details', {}))
-    sql = "INSERT INTO tblCustomerMaster (customerName, customer_code, details, createdBy) VALUES (%s, %s, %s, %s) RETURNING slno"
-    return execute_query(sql, (payload.get('customerName'), payload.get('customer_code'), details, payload.get('createdBy', 'Admin')), False)
+    sql = "INSERT INTO tblCustomerMaster (customerName, customer_code, details, peoplelimit, createdBy) VALUES (%s, %s, %s, %s, %s) RETURNING slno"
+    return execute_query(sql, (payload.get('customerName'), payload.get('customer_code'), details, payload.get('peoplelimit'), payload.get('createdBy', 'Admin')), False)
+
+@router.put("/customers/{slno}")
+async def update_customer(slno: int, request: Request):
+    payload = await request.json()
+    details = json.dumps(payload.get('details', {}))
+    sql = "UPDATE tblCustomerMaster SET customerName=%s, customer_code=%s, details=%s::jsonb, peoplelimit=%s WHERE slno=%s"
+    return execute_query(sql, (payload.get('customerName'), payload.get('customer_code'), details, payload.get('peoplelimit'), slno), False)
+
+@router.delete("/customers/{slno}")
+def delete_customer(slno: int):
+    sql = "UPDATE tblCustomerMaster SET isDeleted=1 WHERE slno=%s"
+    return execute_query(sql, (slno,), False)
 
 # ----- PARAMETERS -----
 @router.get("/parameters")

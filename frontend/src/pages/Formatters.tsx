@@ -24,6 +24,15 @@ export default function Formatters() {
     const [testSqlData, setTestSqlData] = useState<any>(null);
     const [isTesting, setIsTesting] = useState(false);
 
+    // History Tracking State
+    const [historyLogs, setHistoryLogs] = useState<any[]>([]);
+    const [histCompany, setHistCompany] = useState("");
+    const [histDevice, setHistDevice] = useState("");
+    const [histFrom, setHistFrom] = useState("");
+    const [histTo, setHistTo] = useState("");
+    const [histLoading, setHistLoading] = useState(false);
+    const [histPayloadModal, setHistPayloadModal] = useState<any>(null);
+
     useEffect(() => {
         if (!formJson.trim()) {
             setJsonError(null);
@@ -51,8 +60,23 @@ export default function Formatters() {
             .finally(() => setLoading(false));
     };
 
+    const fetchHistoryLogs = () => {
+        setHistLoading(true);
+        const params = new URLSearchParams();
+        if (histCompany) params.append('company', histCompany);
+        if (histDevice) params.append('device_id', histDevice);
+        if (histFrom) params.append('from_date', histFrom);
+        if (histTo) params.append('to_date', histTo);
+        
+        axios.get(`http://${window.location.hostname}:8381/api/dashboard/json-history?${params.toString()}`)
+            .then(res => setHistoryLogs(res.data?.data || []))
+            .catch(() => toast.error("Failed to fetch JSON history records"))
+            .finally(() => setHistLoading(false));
+    };
+
     useEffect(() => {
         fetchFormatters();
+        fetchHistoryLogs();
     }, []);
 
     const handlePrettify = () => {
@@ -390,6 +414,76 @@ export default function Formatters() {
                             <button onClick={() => setTestModalOpen(false)} className="px-5 py-2 text-sm font-medium text-white bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors">
                                 Close Terminal
                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {/* History Tracking Interface */}
+            <div className="mt-8 bg-white rounded-3xl border border-slate-100 shadow-xl shadow-slate-200/50 overflow-hidden flex flex-col shrink-0 min-h-[400px]">
+                <div className="px-6 py-5 border-b border-slate-100 bg-slate-50 flex items-center justify-between flex-wrap gap-4">
+                    <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                        <span className="p-1.5 bg-indigo-100 rounded-lg text-indigo-600"><FileJson size={16} /></span>
+                        Generated JSON Transmission History
+                    </h3>
+                    <div className="flex items-center gap-3 flex-wrap">
+                        <input type="text" placeholder="Company..." value={histCompany} onChange={e => setHistCompany(e.target.value)} className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-indigo-500 w-40" />
+                        <input type="text" placeholder="Device ID..." value={histDevice} onChange={e => setHistDevice(e.target.value)} className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-indigo-500 w-40" />
+                        <input type="date" value={histFrom} onChange={e => setHistFrom(e.target.value)} className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm outline-none text-slate-600" />
+                        <span className="text-slate-400 text-sm">to</span>
+                        <input type="date" value={histTo} onChange={e => setHistTo(e.target.value)} className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm outline-none text-slate-600" />
+                        <button onClick={fetchHistoryLogs} className="bg-indigo-600 text-white px-4 py-1.5 rounded-lg text-sm font-semibold hover:bg-indigo-500 transition-colors shadow-sm shadow-indigo-500/20">Filter</button>
+                    </div>
+                </div>
+                <div className="flex-1 overflow-auto bg-slate-50/30">
+                    <table className="w-full text-left text-sm whitespace-nowrap">
+                        <thead className="bg-slate-100 sticky top-0 z-10 shadow-sm shadow-slate-200/50">
+                            <tr className="text-slate-500 font-semibold text-xs tracking-wider uppercase">
+                                <th className="px-6 py-4">Generation Time</th>
+                                <th className="px-6 py-4">Company</th>
+                                <th className="px-6 py-4">Device ID</th>
+                                <th className="px-6 py-4">Payload Inspector</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100/80">
+                            {histLoading ? (
+                                <tr><td colSpan={4} className="px-6 py-12 text-center text-slate-400 animate-pulse font-medium">Fetching history blocks...</td></tr>
+                            ) : historyLogs.length === 0 ? (
+                                <tr><td colSpan={4} className="px-6 py-12 text-center text-slate-400">No JSON payloads generated in this period.</td></tr>
+                            ) : historyLogs.map((log: any) => (
+                                <tr key={log.slno} className="hover:bg-slate-50 transition-colors group">
+                                    <td className="px-6 py-3 font-mono text-slate-600">{new Date(log.created_at).toLocaleString()}</td>
+                                    <td className="px-6 py-3 text-slate-700 font-medium">{log.customerName || log.customername || 'N/A'}</td>
+                                    <td className="px-6 py-3">
+                                        <span className="px-2 py-1 bg-slate-100 text-slate-600 rounded font-mono text-xs">{log.deviceid}</span>
+                                    </td>
+                                    <td className="px-6 py-3">
+                                        <button onClick={() => setHistPayloadModal(log)} className="text-indigo-600 hover:text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded text-xs font-bold transition-colors">
+                                            View Mapping
+                                        </button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            {/* History Payload Modal */}
+            {histPayloadModal && (
+                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md animate-in fade-in duration-200">
+                    <div className="bg-[#1E1E1E] rounded-2xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col border border-slate-700 max-h-[85vh]">
+                        <div className="px-6 py-4 border-b border-slate-700 flex items-center justify-between">
+                            <h3 className="text-lg font-bold text-slate-200 flex items-center gap-2">
+                                <Braces size={18} className="text-indigo-400" /> Historic JSON String
+                            </h3>
+                            <button onClick={() => setHistPayloadModal(null)} className="text-slate-400 hover:text-white transition-colors p-1 rounded-lg hover:bg-slate-700">
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="p-6 overflow-auto flex-1">
+                            <pre className="text-sky-300 font-mono text-sm leading-relaxed overflow-auto">
+                                {JSON.stringify(histPayloadModal.json_payload, null, 2)}
+                            </pre>
                         </div>
                     </div>
                 </div>
