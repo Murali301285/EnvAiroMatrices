@@ -294,13 +294,18 @@ async def add_json_mapping(request: Request):
 # ----- SCHEDULER -----
 @router.get("/schedulers")
 def get_schedulers():
-    return execute_query("SELECT slno, customer_code, frequency, starting_time, create_local_json, alert_req, alert_freq, post_url_staging, is_staging, post_url_live FROM tblScheduler WHERE isDeleted=0")
+    return execute_query("SELECT slno, customer_code, frequency, starting_time, create_local_json, alert_req, alert_freq, post_url_staging, is_staging, post_url_live, is_active, TO_CHAR(last_run, 'YYYY-MM-DD HH24:MI:SS') as last_run FROM tblScheduler WHERE isDeleted=0")
+
+@router.put("/schedulers/{slno}/toggle")
+def toggle_scheduler(slno: int):
+    return execute_query("UPDATE tblScheduler SET is_active = NOT is_active WHERE slno=%s", (slno,), False)
 
 @router.post("/schedulers")
 async def add_scheduler(request: Request):
     p = await request.json()
-    sql = "INSERT INTO tblScheduler (customer_code, frequency, starting_time, create_local_json, alert_req, alert_freq, post_url_staging, is_staging, post_url_live) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING slno"
-    return execute_query(sql, (p.get('customer_code'), p.get('frequency'), p.get('starting_time'), p.get('create_local_json', False), p.get('alert_req', False), p.get('alert_freq'), p.get('post_url_staging'), p.get('is_staging', False), p.get('post_url_live')), False)
+    p_freqs = json.dumps(p.get('param_alert_freq', {"TVOC": 15, "PCH": 30, "PCD": 60}))
+    sql = "INSERT INTO tblScheduler (customer_code, frequency, starting_time, create_local_json, alert_req, alert_freq, post_url_staging, is_staging, post_url_live, param_alert_freq) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING slno"
+    return execute_query(sql, (p.get('customer_code'), p.get('frequency'), p.get('starting_time'), p.get('create_local_json', False), p.get('alert_req', False), p.get('alert_freq'), p.get('post_url_staging'), p.get('is_staging', False), p.get('post_url_live'), p_freqs), False)
 
 # ----- UNIVERSAL EDIT AND DELETE ENDPOINTS -----
 @router.delete("/{entity}/{slno}")
@@ -348,7 +353,8 @@ async def update_entity(entity: str, slno: int, request: Request):
     elif entity == "json-mapping":
         return execute_query("UPDATE tblDeviceJsonMapping SET customer_code=%s, scheduledjsonid=%s, alertjsonid=%s, resolvedjsonid=%s, folder_name=%s WHERE slno=%s", (p.get('customer_code'), p.get('scheduled_json_id'), p.get('alert_json_id'), p.get('resolved_json_id'), p.get('folder_name', ''), slno), False)
     elif entity == "schedulers":
-        return execute_query("UPDATE tblScheduler SET customer_code=%s, frequency=%s, starting_time=%s, create_local_json=%s, alert_req=%s, alert_freq=%s, post_url_staging=%s, is_staging=%s, post_url_live=%s WHERE slno=%s", (p.get('customer_code'), p.get('frequency'), p.get('starting_time'), p.get('create_local_json', False), p.get('alert_req', False), p.get('alert_freq'), p.get('post_url_staging'), p.get('is_staging', False), p.get('post_url_live'), slno), False)
+        p_freqs = json.dumps(p.get('param_alert_freq', {"TVOC": 15, "PCH": 30, "PCD": 60}))
+        return execute_query("UPDATE tblScheduler SET customer_code=%s, frequency=%s, starting_time=%s, create_local_json=%s, alert_req=%s, alert_freq=%s, post_url_staging=%s, is_staging=%s, post_url_live=%s, param_alert_freq=%s WHERE slno=%s", (p.get('customer_code'), p.get('frequency'), p.get('starting_time'), p.get('create_local_json', False), p.get('alert_req', False), p.get('alert_freq'), p.get('post_url_staging'), p.get('is_staging', False), p.get('post_url_live'), p_freqs, slno), False)
     
     return {"status": "error", "message": "Invalid entity context"}
 

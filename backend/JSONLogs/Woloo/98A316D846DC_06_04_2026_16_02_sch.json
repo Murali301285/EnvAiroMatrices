@@ -1,0 +1,36 @@
+{
+  "client_id": "Silotech",
+  "device_id": "98:A3:16:D8:46:DC",
+  "node_name": "AQI SMART 1",
+  "location": "GEM Center",
+  "ist_datetime": "2026-04-02 13:20:23",
+  "ist_time": "13",
+  "window_start": "2026-04-06 16:00:00",
+  "humidity": 37.2,
+  "temperature": 30.9,
+  "temperature_unit": "degrees Celsius",
+  "triggered_by": "scheduled",
+  "parameters": "tvoc,pcd,pch",
+  "is_operational_hours": true,
+  "alert_sequence": 0,
+  "tvoc": {
+    "value": 3.51,
+    "unit": "ppm",
+    "condition": "GOOD"
+  },
+  "tvoc_avg": 0,
+  "tvoc_max": 0,
+  "tvoc_min": 0,
+  "tvoc_consecutive_bad": 0,
+  "pch": {
+    "value": 0,
+    "unit": "",
+    "pch_in": 0,
+    "condition": "GOOD"
+  },
+  "pcd_max": 0,
+  "pcd_consecutive_bad": 0,
+  "pch_avg": 0,
+  "pch_max": 0,
+  "pch_consecutive_bad": 0
+}

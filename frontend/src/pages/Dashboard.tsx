@@ -5,7 +5,9 @@ import {
 } from 'recharts';
 import * as XLSX from 'xlsx';
 import html2canvas from 'html2canvas';
-import { Filter, Download, ArrowLeft, ArrowRight, ChevronsLeft, ChevronsRight, Building2, Cpu, Maximize, Minimize2, ChevronUp, ChevronDown } from 'lucide-react';
+import type { ColumnDef } from '@tanstack/react-table';
+import DataTable from '../components/DataTable';
+import { Filter, Download, ArrowLeft, ArrowRight, ChevronsLeft, ChevronsRight, Building2, Cpu, Maximize, Minimize2, ChevronUp, ChevronDown, FileJson } from 'lucide-react';
 import Select from 'react-select';
 import { toast } from '../utils/toast';
 
@@ -40,8 +42,16 @@ export default function Dashboard({ latestData }: { latestData: string }) {
     const [rowsRaw, setRowsRaw] = useState(10);
     const [sortRaw, setSortRaw] = useState<{ key: string, dir: 'asc' | 'desc' } | null>(null);
 
+    // JSON Dynamic Engine States
+    const [jsonHistoryLogs, setJsonHistoryLogs] = useState<any[]>([]);
+    const [jsonColumns, setJsonColumns] = useState<ColumnDef<any, any>[]>([]);
+    const [jsonLoading, setJsonLoading] = useState(false);
+
     // New UI states
     const [isFilterOpen, setIsFilterOpen] = useState(true);
+    const [isMinuteDataOpen, setIsMinuteDataOpen] = useState(true);
+    const [isRawDataOpen, setIsRawDataOpen] = useState(true);
+    const [isJsonDataOpen, setIsJsonDataOpen] = useState(true);
     const [isChartFullscreen, setIsChartFullscreen] = useState(false);
 
     const aqiRef = useRef<any>(null);
@@ -145,6 +155,72 @@ export default function Dashboard({ latestData }: { latestData: string }) {
         return obj;
     };
 
+    const flattenObject = (obj: any, prefix = ''): any => {
+        return Object.keys(obj).reduce((acc: any, k: string) => {
+            const pre = prefix.length ? prefix + '_' : '';
+            if (typeof obj[k] === 'object' && obj[k] !== null && !Array.isArray(obj[k])) {
+                Object.assign(acc, flattenObject(obj[k], pre + k));
+            } else {
+                acc[pre + k] = obj[k];
+            }
+            return acc;
+        }, {});
+    };
+
+    const fetchJsonHistory = () => {
+        if (!selectedDevice?.value) return;
+        setJsonLoading(true);
+
+        const params = new URLSearchParams();
+        if (selectedCompany?.value) params.append('company', selectedCompany.label);
+        if (selectedDevice?.value) params.append('device_id', selectedDevice.value);
+        if (fromDate) params.append('from_date', fromDate.replace('T', ' ') + ':00');
+        if (toDate) params.append('to_date', toDate.replace('T', ' ') + ':59');
+        params.append('limit', '500');
+
+        axios.get(`http://${window.location.hostname}:8381/api/dashboard/json-history?${params.toString()}`)
+            .then(res => {
+                if (res.data?.status === 'success') {
+                    const rawLogs = res.data.data || [];
+                    const processedLogs = rawLogs.map((log: any, idx: number) => ({
+                        ...log,
+                        mapped_slno: idx + 1,
+                        ...flattenObject(log.json_payload || {})
+                    }));
+
+                    const dynamicKeys = new Set<string>();
+                    processedLogs.forEach((log: any) => {
+                        Object.keys(log).forEach(k => {
+                            if (!['slno', 'mapped_slno', 'deviceid', 'created_at', 'payload_type', 'json_payload', 'customername'].includes(k)) {
+                                dynamicKeys.add(k);
+                            }
+                        });
+                    });
+
+                    const dynCols = Array.from(dynamicKeys).map(k => ({
+                        accessorKey: k,
+                        header: k.toUpperCase().replace(/_/g, ' '),
+                        cell: (info: any) => {
+                            const val = info.getValue();
+                            return <span className="font-mono text-slate-600 font-medium">{val !== undefined ? String(val) : '-'}</span>;
+                        }
+                    }));
+
+                    const baseCols: ColumnDef<any, any>[] = [
+                        { accessorKey: 'mapped_slno', header: 'SLNo', cell: (info: any) => <span className="text-slate-500 font-medium px-2">{info.getValue() as number}</span> },
+                        { accessorKey: 'deviceid', header: 'Device ID', cell: (info: any) => <span className="text-sky-600 font-bold tracking-wide">{info.getValue() as string}</span> },
+                        { accessorKey: 'created_at', header: 'Datetime', cell: (info: any) => <span className="text-slate-500 font-mono text-[11px] whitespace-nowrap">{new Date(info.getValue() as string).toLocaleString()}</span> },
+                        { accessorKey: 'payload_type', header: 'Type', cell: (info: any) => <span className={`px-2 py-0.5 rounded text-[10px] font-bold tracking-wider uppercase ${info.getValue() === 'Alert' ? 'bg-rose-100 text-rose-700' : info.getValue() === 'Resolved' ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'}`}>{info.getValue() as string || 'Scheduled'}</span> }
+                    ];
+
+                    setJsonColumns([...baseCols, ...dynCols]);
+                    setJsonHistoryLogs(processedLogs);
+                }
+            })
+            .catch(err => console.error("JSON fetch fail", err))
+            .finally(() => setJsonLoading(false));
+    };
+
     const fetchTelemetry = () => {
         if (!selectedDevice?.value) return;
         setLoading(true);
@@ -226,7 +302,8 @@ export default function Dashboard({ latestData }: { latestData: string }) {
         let interval: ReturnType<typeof setInterval>;
         if (autoRefresh) {
             fetchTelemetry();
-            interval = setInterval(fetchTelemetry, 120000);
+            fetchJsonHistory();
+            interval = setInterval(() => { fetchTelemetry(); fetchJsonHistory(); }, 120000);
         }
         return () => {
             if (interval) clearInterval(interval);
@@ -237,6 +314,7 @@ export default function Dashboard({ latestData }: { latestData: string }) {
     useEffect(() => {
         if (!autoRefresh && selectedDevice?.value && latestData && latestData.includes(selectedDevice.value)) {
             fetchTelemetry();
+            fetchJsonHistory();
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [latestData]);
@@ -438,7 +516,7 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                             </div>
 
                             <button
-                                onClick={fetchTelemetry}
+                                onClick={() => { fetchTelemetry(); fetchJsonHistory(); }}
                                 disabled={loading || !selectedDevice?.value}
                                 className="bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-white font-semibold px-6 py-2 rounded-lg flex items-center gap-2 transition-all shadow-lg shadow-emerald-500/20 hover:shadow-emerald-500/40 disabled:opacity-50 disabled:cursor-not-allowed text-sm h-[38px]"
                             >
@@ -535,10 +613,13 @@ export default function Dashboard({ latestData }: { latestData: string }) {
             </div>
 
             {/* MINUTE DATA TABLE */}
-            <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm mb-6 flex flex-col">
-                <div className="flex items-center justify-between mb-4">
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm mb-6 flex flex-col pt-4 px-6 pb-6">
+                <div 
+                    className={`flex items-center justify-between mb-4 cursor-pointer hover:text-indigo-600 transition-colors ${!isMinuteDataOpen ? 'mb-0 pb-0' : ''}`}
+                    onClick={() => setIsMinuteDataOpen(!isMinuteDataOpen)}
+                >
                     <h3 className="text-xl font-bold text-slate-800">Minute Data ({dataList.length} rows)</h3>
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3" onClick={e => e.stopPropagation()}>
                         <div className="relative">
                             <Filter size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                             <input type="text" placeholder="Search minute data..." className="pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm w-56 focus:outline-none focus:border-indigo-500" />
@@ -546,10 +627,15 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                         <button onClick={() => handleDownloadExcel('minute')} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-600 font-semibold px-4 py-2 rounded-lg text-sm flex items-center gap-2 transition-colors border border-emerald-100">
                             <Download size={14} /> Download Excel
                         </button>
+                        <div className="bg-slate-100 p-1 rounded-full text-slate-500 hover:text-slate-800 hover:bg-slate-200 transition-colors cursor-pointer ml-2" onClick={() => setIsMinuteDataOpen(!isMinuteDataOpen)}>
+                            {isMinuteDataOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                        </div>
                     </div>
                 </div>
 
-                <div className="overflow-x-auto w-full border border-slate-100 rounded-xl mb-4">
+                {isMinuteDataOpen && (
+                    <>
+                        <div className="overflow-x-auto w-full border border-slate-100 rounded-xl mb-4">
                     <table className="w-full text-left text-sm text-slate-600 whitespace-nowrap">
                         <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-xs">
                             <tr>
@@ -622,13 +708,18 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                         <button onClick={() => setPageMinute(Math.max(0, Math.ceil(sortedMinuteData.length / rowsMinute) - 1))} disabled={pageMinute >= Math.ceil(sortedMinuteData.length / rowsMinute) - 1} className="hover:text-indigo-600 disabled:opacity-30"><ChevronsRight size={16} /></button>
                     </div>
                 </div>
+                </>
+                )}
             </div>
 
             {/* DB DATA (RAW STRING) TABLE */}
-            <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm flex flex-col">
-                <div className="flex items-center justify-between mb-4">
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm flex flex-col pt-4 px-6 pb-6 mb-6">
+                <div 
+                    className={`flex items-center justify-between mb-4 cursor-pointer hover:text-indigo-600 transition-colors ${!isRawDataOpen ? 'mb-0 pb-0' : ''}`}
+                    onClick={() => setIsRawDataOpen(!isRawDataOpen)}
+                >
                     <h3 className="text-xl font-bold text-slate-800">DB Data (Raw String) ({dataList.length} rows)</h3>
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3" onClick={e => e.stopPropagation()}>
                         <div className="relative">
                             <Filter size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                             <input type="text" placeholder="Search raw data..." className="pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm w-56 focus:outline-none focus:border-indigo-500" />
@@ -636,11 +727,16 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                         <button onClick={() => handleDownloadExcel('raw')} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-600 font-semibold px-4 py-2 rounded-lg text-sm flex items-center gap-2 transition-colors border border-emerald-100">
                             <Download size={14} /> Download Excel
                         </button>
+                        <div className="bg-slate-100 p-1 rounded-full text-slate-500 hover:text-slate-800 hover:bg-slate-200 transition-colors cursor-pointer ml-2" onClick={() => setIsRawDataOpen(!isRawDataOpen)}>
+                            {isRawDataOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                        </div>
                     </div>
                 </div>
 
-                <div className="overflow-x-auto w-full border border-slate-100 rounded-xl mb-4">
-                    <table className="w-full text-left text-sm text-slate-600 whitespace-nowrap">
+                {isRawDataOpen && (
+                    <>
+                    <div className="overflow-x-auto w-full border border-slate-100 rounded-xl mb-4">
+                        <table className="w-full text-left text-sm text-slate-600 whitespace-nowrap">
                         <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-xs border-b border-slate-100">
                             <tr>
                                 <th onClick={() => handleSortToggle('slno_ui', 'raw')} className="px-5 py-4 w-20 cursor-pointer select-none group hover:bg-slate-100 transition-colors">
@@ -697,6 +793,33 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                         <button onClick={() => setPageRaw(Math.max(0, Math.ceil(sortedRawData.length / rowsRaw) - 1))} disabled={pageRaw >= Math.ceil(sortedRawData.length / rowsRaw) - 1} className="hover:text-indigo-600 disabled:opacity-30"><ChevronsRight size={16} /></button>
                     </div>
                 </div>
+                </>
+                )}
+            </div>
+
+            {/* JSON TRANSMISSION HISTORY */}
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm mb-6 flex flex-col pt-4 px-6 pb-6">
+                <div 
+                    className={`flex items-center justify-between mb-4 cursor-pointer hover:text-indigo-600 transition-colors ${!isJsonDataOpen ? 'mb-0 pb-0' : ''}`}
+                    onClick={() => setIsJsonDataOpen(!isJsonDataOpen)}
+                >
+                    <h3 className="text-xl font-bold flex items-center gap-2 text-indigo-900"><FileJson className="text-indigo-500" size={24} /> Scheduled JSON Output Matrix</h3>
+                    <div className="flex items-center gap-3" onClick={e => e.stopPropagation()}>
+                        {jsonLoading && <span className="text-sm font-semibold tracking-wide text-indigo-500 animate-pulse flex items-center pr-4">Decoding Payloads...</span>}
+                        <div className="bg-slate-100 p-1 rounded-full text-slate-500 hover:text-slate-800 hover:bg-slate-200 transition-colors cursor-pointer ml-2" onClick={() => setIsJsonDataOpen(!isJsonDataOpen)}>
+                            {isJsonDataOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                        </div>
+                    </div>
+                </div>
+                {isJsonDataOpen && (
+                    <div className="border border-slate-200 rounded-xl overflow-hidden w-full bg-slate-50 min-h-[400px]">
+                    <DataTable 
+                         columns={jsonColumns} 
+                         data={jsonHistoryLogs} 
+                         searchPlaceholder="Search decrypted payload objects..." 
+                    />
+                </div>
+                )}
             </div>
 
         </div>

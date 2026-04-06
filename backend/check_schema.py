@@ -1,12 +1,12 @@
 import psycopg2
-from database import DATABASE_URL
+from database import get_db_connection
 
-def alter_schema():
-    conn = psycopg2.connect(DATABASE_URL)
-    c = conn.cursor()
-    c.execute("ALTER TABLE tblparametermaster ADD COLUMN IF NOT EXISTS datatype VARCHAR(50) DEFAULT 'Decimal'")
-    c.execute("ALTER TABLE tblparametermaster ADD COLUMN IF NOT EXISTS decimalplaces INT DEFAULT 2")
-    conn.commit()
-    print("Schema updated successfully.")
+def check():
+    conn = get_db_connection()
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'tblscheduledjsonhistory';")
+        for row in cursor.fetchall():
+            print(row)
+    conn.close()
 
-alter_schema()
+check()

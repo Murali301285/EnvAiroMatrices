@@ -139,13 +139,14 @@ def get_scheduled_json_history(
     device_id: str = Query(None),
     from_date: str = Query(None),
     to_date: str = Query(None),
+    payload_type: str = Query(None),
     limit: int = Query(100)
 ):
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
             query = """
-                SELECT h.slno, h.deviceid, h.json_payload, h.created_at, c.customerName
+                SELECT h.slno, h.deviceid, h.json_payload, h.created_at, h.payload_type, MAX(c.customerName) as customername
                 FROM tblScheduledJsonHistory h
                 LEFT JOIN tblDeviceMaster d ON h.deviceid = d.deviceid
                 LEFT JOIN tblCustomerMaster c ON d.customer_code = c.customer_code
@@ -158,14 +159,17 @@ def get_scheduled_json_history(
             if device_id:
                 query += " AND h.deviceid = %s"
                 params.append(device_id)
+            if payload_type and payload_type != 'All':
+                query += " AND h.payload_type = %s"
+                params.append(payload_type)
             if from_date:
                 query += " AND h.created_at >= %s"
-                params.append(from_date + " 00:00:00")
+                params.append(from_date if len(from_date) > 10 else from_date + " 00:00:00")
             if to_date:
                 query += " AND h.created_at <= %s"
-                params.append(to_date + " 23:59:59")
+                params.append(to_date if len(to_date) > 10 else to_date + " 23:59:59")
                 
-            query += " ORDER BY h.created_at DESC LIMIT %s"
+            query += " GROUP BY h.slno, h.deviceid, h.json_payload, h.created_at, h.payload_type ORDER BY h.created_at DESC LIMIT %s"
             params.append(limit)
             
             cursor.execute(query, tuple(params))

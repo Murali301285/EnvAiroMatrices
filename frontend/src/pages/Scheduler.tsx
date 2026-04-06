@@ -23,6 +23,9 @@ export default function Scheduler() {
 
     const [formAlertReq, setFormAlertReq] = useState(false);
     const [formAlertFreq, setFormAlertFreq] = useState("1");
+    const [formParamTVOC, setFormParamTVOC] = useState("15");
+    const [formParamPCH, setFormParamPCH] = useState("30");
+    const [formParamPCD, setFormParamPCD] = useState("60");
 
     const [formStagingUrl, setFormStagingUrl] = useState("");
     const [formIsStaging, setFormIsStaging] = useState(false);
@@ -68,6 +71,11 @@ export default function Scheduler() {
             create_local_json: formLocalJson,
             alert_req: formAlertReq,
             alert_freq: formAlertReq ? parseInt(formAlertFreq) : null,
+            param_alert_freq: {
+                TVOC: parseInt(formParamTVOC || "15"),
+                PCH: parseInt(formParamPCH || "30"),
+                PCD: parseInt(formParamPCD || "60")
+            },
             post_url_staging: formStagingUrl,
             is_staging: formIsStaging,
             post_url_live: formLiveUrl
@@ -96,6 +104,16 @@ export default function Scheduler() {
         setFormLocalJson(row.create_local_json || false);
         setFormAlertReq(row.alert_req || false);
         setFormAlertFreq((row.alert_freq || 1).toString());
+        
+        try {
+            const paramFreqs = typeof row.param_alert_freq === 'string' ? JSON.parse(row.param_alert_freq) : (row.param_alert_freq || {});
+            setFormParamTVOC((paramFreqs.TVOC || 15).toString());
+            setFormParamPCH((paramFreqs.PCH || 30).toString());
+            setFormParamPCD((paramFreqs.PCD || 60).toString());
+        } catch {
+            setFormParamTVOC("15"); setFormParamPCH("30"); setFormParamPCD("60");
+        }
+        
         setFormStagingUrl(row.post_url_staging || "");
         setFormIsStaging(row.is_staging || false);
         setFormLiveUrl(row.post_url_live || "");
@@ -117,6 +135,22 @@ export default function Scheduler() {
                 }
             })
             .catch(() => { toast.error("Network Error"); setLoading(false); });
+    };
+
+    const handleToggleStatus = (slno: number, current_status: boolean) => {
+        // Optimistic UI Update natively natively
+        setSchedulers(prev => prev.map(s => s.slno === slno ? { ...s, is_active: !s.is_active } : s));
+        
+        axios.put(`http://${window.location.hostname}:8381/admin/schedulers/${slno}/toggle`)
+            .then(res => {
+                if (res.data.status === 'success') {
+                    toast.success(current_status ? "Payload Dispatch Paused." : "Payload Dispatch Started.");
+                } else {
+                    toast.error("Status Toggle Failed");
+                    fetchData(); // Rollback natively
+                }
+            })
+            .catch(() => { toast.error("Network Error on Toggle"); fetchData(); });
     };
 
     const handleCloseModal = () => {
@@ -150,6 +184,35 @@ export default function Scheduler() {
                         <span className="text-xs text-slate-400">Lock: {s.starting_time}</span>
                     </div>
                 );
+            }
+        },
+        {
+            id: 'status',
+            header: 'Engine Status',
+            cell: info => {
+                const s = info.row.original;
+                return (
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={() => handleToggleStatus(s.slno, s.is_active)}
+                            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${s.is_active ? 'bg-emerald-500' : 'bg-slate-300 shadow-inner'}`}
+                            title={s.is_active ? 'Active Engine' : 'Paused Engine'}
+                        >
+                            <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${s.is_active ? 'translate-x-5' : 'translate-x-1'}`} />
+                        </button>
+                        <span className={`text-xs font-bold uppercase tracking-widest ${s.is_active ? 'text-emerald-600' : 'text-slate-400'}`}>
+                            {s.is_active ? 'ON' : 'PAUSED'}
+                        </span>
+                    </div>
+                );
+            }
+        },
+        {
+            accessorKey: 'last_run',
+            header: 'Last Dispatched',
+            cell: info => {
+                const v = info.getValue() as string;
+                return <span className="text-xs text-slate-600 font-mono bg-slate-50 px-2 py-1 rounded border border-slate-100">{v ? v : <span className="text-slate-400 italic">Never</span>}</span>;
             }
         },
         {
@@ -291,12 +354,30 @@ export default function Scheduler() {
                                             </button>
                                         </div>
                                         {formAlertReq && (
-                                            <div className="animate-in slide-in-from-top-2 duration-200">
-                                                <label className="block text-sm font-semibold text-amber-800 mb-2">Continuous Recheck Rate (Minutes)</label>
-                                                <select value={formAlertFreq} onChange={e => setFormAlertFreq(e.target.value)} className="w-48 px-3 py-2 border border-amber-200 rounded-lg focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 outline-none transition-all text-sm bg-white">
-                                                    {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => <option key={n} value={n}>{n} Minute{n > 1 ? 's' : ''}</option>)}
-                                                </select>
-                                                <p className="text-xs text-amber-700/80 mt-2">If an alert threshold is breached, the engine will aggressively ping the node at this elevated interval.</p>
+                                            <div className="animate-in slide-in-from-top-2 duration-200 mt-4 space-y-4">
+                                                <div>
+                                                    <label className="block text-sm font-semibold text-amber-800 mb-2">Base Recheck Rate (Min)</label>
+                                                    <select value={formAlertFreq} onChange={e => setFormAlertFreq(e.target.value)} className="w-full px-3 py-2 border border-amber-200 rounded-lg focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 outline-none transition-all text-sm bg-white">
+                                                        {[1, 2, 3, 4, 5, 10, 15, 30, 60].map(n => <option key={n} value={n}>{n} Minute{n > 1 ? 's' : ''}</option>)}
+                                                    </select>
+                                                </div>
+                                                <div className="pt-2 border-t border-amber-200">
+                                                    <label className="block text-sm font-semibold text-amber-800 mb-3">Decoupled Parameter Intervals</label>
+                                                    <div className="grid grid-cols-3 gap-2">
+                                                        <div>
+                                                            <span className="text-xs text-amber-700 block mb-1">TVOC</span>
+                                                            <input type="number" min="1" value={formParamTVOC} onChange={e => setFormParamTVOC(e.target.value)} className="w-full px-2 py-1.5 border border-amber-200 rounded focus:border-amber-500 outline-none text-sm bg-white" />
+                                                        </div>
+                                                        <div>
+                                                            <span className="text-xs text-amber-700 block mb-1">PCH</span>
+                                                            <input type="number" min="1" value={formParamPCH} onChange={e => setFormParamPCH(e.target.value)} className="w-full px-2 py-1.5 border border-amber-200 rounded focus:border-amber-500 outline-none text-sm bg-white" />
+                                                        </div>
+                                                        <div>
+                                                            <span className="text-xs text-amber-700 block mb-1">PCD</span>
+                                                            <input type="number" min="1" value={formParamPCD} onChange={e => setFormParamPCD(e.target.value)} className="w-full px-2 py-1.5 border border-amber-200 rounded focus:border-amber-500 outline-none text-sm bg-white" />
+                                                        </div>
+                                                    </div>
+                                                </div>
                                             </div>
                                         )}
                                     </div>

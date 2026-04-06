@@ -21,7 +21,21 @@ def _parse_template(template_str, sp_name, deviceid, overrides=None):
             with conn.cursor() as cursor:
                 cursor.execute(f"SELECT * FROM {sp_name}(%s)", (deviceid,))
                 result = cursor.fetchone()
-                if result: db_context = dict(result)
+                if result: 
+                    db_context = dict(result)
+                    
+                    # Natively recursively flatten any nested JSON dictionaries so sub-fields map dynamically automatically cleanly.
+                    for k, v in list(db_context.items()):
+                        if isinstance(v, str):
+                            try:
+                                if v.strip().startswith('{') and v.strip().endswith('}'):
+                                    v = json.loads(v)
+                            except Exception:
+                                pass
+                                
+                        if isinstance(v, dict):
+                            for sub_k, sub_v in v.items():
+                                db_context[sub_k] = sub_v
         except Exception as e:
             print(f"STORED_PROCEDURE Execution Error ({sp_name}): {e}")
         finally:
@@ -76,21 +90,37 @@ def orchestrate_json_payloads():
             cursor.execute("SELECT slno, deviceid, revText, receivedOn FROM tblDatareceiver WHERE isProcessed=0 LIMIT 50")
             unprocessed = cursor.fetchall()
             
+            # Map devices already executed in this interval to prevent massive duplicate JSON spam
+            orchestrated_devices = set()
+            
             for row in unprocessed:
                 slno = row['slno']
                 dev_id = row['deviceid']
                 
+                # If we've already transmitted & built this payload in this cycle, silently mark block processed to exhaust the queue safely
+                if dev_id in orchestrated_devices:
+                    cursor.execute("UPDATE tblDatareceiver SET isProcessed=1, processedOn=NOW() WHERE slno=%s", (slno,))
+                    continue
+                
                 # Fetch formatter securely inheriting via Company definition && Check Output Folder Name
                 cursor.execute("""
-                    SELECT f.jsonTemplate, f.storedProcedureName, m.folder_name, dm.create_json_file
+                    SELECT f.jsonTemplate, f.storedProcedureName, m.folder_name, dm.create_json_file, s.is_active, s.slno as schedule_id, f.type as payload_type
                     FROM tblDeviceMaster dm
                     JOIN tblDeviceJsonMapping m ON dm.customer_code = m.customer_code
                     JOIN tblJsonFormatter f ON m.scheduledJsonId = f.slno 
+                    LEFT JOIN tblScheduler s ON dm.customer_code = s.customer_code AND s.isDeleted=0
                     WHERE dm.deviceid=%s AND f.isDeleted=0
                 """, (dev_id,))
                 formatter = cursor.fetchone()
                 
                 if formatter and (formatter.get('jsontemplate') or formatter.get('jsonTemplate')):
+                    is_active = formatter.get('is_active')
+                    
+                    if is_active is False:
+                        # Safely drop processing queue without triggering execution
+                        cursor.execute("UPDATE tblDatareceiver SET isProcessed=1, processedOn=NOW() WHERE slno=%s", (slno,))
+                        continue
+
                     template = formatter.get('jsontemplate') or formatter.get('jsonTemplate')
                     sp_name = formatter.get('storedprocedurename') or formatter.get('storedProcedureName')
                     folder_name = formatter.get('folder_name') or ''
@@ -116,15 +146,22 @@ def orchestrate_json_payloads():
                                 print(f"Local Store ERROR: {file_err}")
 
                         # Push to Scheduled JSON Track Record
-                        cursor.execute("INSERT INTO tblScheduledJsonHistory (deviceid, json_payload) VALUES (%s, %s::jsonb)", 
-                                      (dev_id, result_payload))
+                        payload_type = formatter.get('payload_type') or 'Scheduled'
+                        cursor.execute("INSERT INTO tblScheduledJsonHistory (deviceid, json_payload, payload_type) VALUES (%s, %s::jsonb, %s)", 
+                                      (dev_id, result_payload, payload_type))
                                       
                         # Push to Dead letter Queue target
                         cursor.execute("INSERT INTO tblDeadLetterQueue (deviceid, payload, targetUrl) VALUES (%s, %s, %s)", 
                                       (dev_id, result_payload, "https://api.external.com/submit"))
                                       
+                        # Document execution time internally
+                        schedule_id = formatter.get('schedule_id')
+                        if schedule_id:
+                            cursor.execute("UPDATE tblScheduler SET last_run = NOW() WHERE slno=%s", (schedule_id,))
+                                      
                 # Mark as processed
                 cursor.execute("UPDATE tblDatareceiver SET isProcessed=1, processedOn=NOW() WHERE slno=%s", (slno,))
+                orchestrated_devices.add(dev_id)
             conn.commit()
     except Exception as e:
         print(f"Orchestration Error: {e}")
@@ -430,7 +467,7 @@ def evaluate_active_alerts():
         with conn.cursor() as cursor:
             # 1. Fetch devices with alert dispatch configuration 
             cursor.execute("""
-                SELECT dm.deviceid, s.alert_freq, s.post_url_live, s.post_url_staging, f.jsonTemplate, f.storedProcedureName
+                SELECT dm.deviceid, s.alert_freq, s.param_alert_freq, s.post_url_live, s.post_url_staging, f.jsonTemplate, f.storedProcedureName
                 FROM tblDeviceMaster dm
                 JOIN tblScheduler s ON dm.customer_code = s.customer_code
                 JOIN tblDeviceJsonMapping m ON dm.customer_code = m.customer_code
@@ -441,11 +478,18 @@ def evaluate_active_alerts():
             
             for dev in devices:
                 dev_id = dev['deviceid']
-                alert_freq = dev['alert_freq'] or 5
+                base_alert_freq = dev['alert_freq'] or 5
                 sp_name = dev['storedprocedurename'] or dev['storedprocedureName']
                 template = dev['jsontemplate'] or dev['jsonTemplate']
                 target_url = dev['post_url_live'] or "https://api.external.com/submit"
                 if not sp_name: continue
+                
+                # Natively extract Configurator block mappings
+                param_freqs = dev.get('param_alert_freq') or {}
+                if isinstance(param_freqs, str):
+                    try: param_freqs = json.loads(param_freqs)
+                    except: param_freqs = {}
+                def_freqs = {'TVOC': base_alert_freq, 'PCH': base_alert_freq, 'PCD': base_alert_freq}
                 
                 # Evaluate current state mathematically natively from Postgres SP logic
                 cursor.execute(f"SELECT * FROM {sp_name}(%s)", (dev_id,))
@@ -453,63 +497,70 @@ def evaluate_active_alerts():
                 if not current_state: continue
                 
                 # Detect Active Broken Parameters
-                broken_tags = []
-                if str(current_state.get('tvoc_con', '')).upper() in ['BAD']: broken_tags.append('TVOC')
-                if current_state.get('pcd_bad') and float(current_state.get('pcd_bad')) > 0: broken_tags.append('PCD')
-                if current_state.get('pch_bad') and float(current_state.get('pch_bad')) > 0: broken_tags.append('PCH')
+                active_bads = []
+                if str(current_state.get('tvoc_con', '')).upper() in ['BAD']: active_bads.append('TVOC')
+                if current_state.get('pcd_bad') is not None and float(current_state.get('pcd_bad')) > 0: active_bads.append('PCD')
+                if current_state.get('pch_bad') is not None and float(current_state.get('pch_bad')) > 0: active_bads.append('PCH')
                 
-                is_currently_bad = len(broken_tags) > 0
-                param_str = ", ".join(broken_tags) if broken_tags else "NONE"
+                cursor.execute("SELECT * FROM tblAlertMonitor WHERE deviceid=%s AND is_resolved=FALSE", (dev_id,))
+                monitors = cursor.fetchall()
+                monitor_map = {m['param_tag']: m for m in monitors}
                 
-                cursor.execute("SELECT slno, Deviceid, param_tag, Createdon, AlertSequence, LastRunOn, consucutive_minutes, isResolved, ResolvedOn, Time_taken FROM tblAlertScheduler WHERE Deviceid=%s AND isResolved=0 ORDER BY slno DESC LIMIT 1", (dev_id,))
-                active_alert = cursor.fetchone()
                 now = datetime.datetime.now()
+                needs_dispatch = False
+                dispatch_type = None
+                newly_resolved_count = 0
+                out_sequences = {'TVOC': 0, 'PCH': 0, 'PCD': 0}
                 
-                if is_currently_bad:
-                    if not active_alert:
-                        # 1. CREATE NEW ALERT! SEQUENCE 0!
-                        cursor.execute("""
-                            INSERT INTO tblAlertScheduler (Deviceid, param_tag, Createdon, AlertSequence, LastRunOn, consucutive_minutes, isResolved)
-                            VALUES (%s, %s, %s, 0, %s, 0, 0) RETURNING slno
-                        """, (dev_id, param_str, now, now))
-                        
-                        overrides = {'triggered_by': 'threshold_breach', 'alert_sequence': 0}
-                        payload = _parse_template(template, sp_name, dev_id, overrides)
-                        cursor.execute("INSERT INTO tblDeadLetterQueue (deviceid, payload, targetUrl) VALUES (%s, %s, %s)", (dev_id, payload, target_url))
-                    else:
-                        # 2. EVALUATE EXISTING ALERT
-                        last_run = active_alert['lastrunon'] if 'lastrunon' in active_alert else active_alert.get('LastRunOn')
-                        mins_elapsed = (now - last_run).total_seconds() / 60.0
-                        
-                        if mins_elapsed >= alert_freq:
-                            # Ticking Configuration Boundary Met -> FIRE
-                            new_seq = int(active_alert['alertsequence'] if 'alertsequence' in active_alert else active_alert.get('AlertSequence')) + 1
-                            created_on = active_alert['createdon'] if 'createdon' in active_alert else active_alert.get('Createdon')
-                            cons_mins = int((now - created_on).total_seconds() / 60.0)
-                            
+                for p in ['TVOC', 'PCH', 'PCD']:
+                    freq = param_freqs.get(p, def_freqs.get(p, 15))
+                    mon = monitor_map.get(p)
+                    is_bad = p in active_bads
+                    
+                    if is_bad:
+                        if not mon:
+                            # 1st Strike! Just monitor it, don't dispatch yet
                             cursor.execute("""
-                                UPDATE tblAlertScheduler 
-                                SET LastRunOn=%s, AlertSequence=%s, consucutive_minutes=%s, param_tag=%s 
-                                WHERE slno=%s
-                            """, (now, new_seq, cons_mins, param_str, active_alert['slno']))
+                                INSERT INTO tblAlertMonitor (deviceid, param_tag, sequence_count, last_checked_on, created_on, is_resolved)
+                                VALUES (%s, %s, 0, %s, %s, FALSE)
+                            """, (dev_id, p, now, now))
+                            out_sequences[p] = 0
+                        else:
+                            last_check = mon['last_checked_on'] if 'last_checked_on' in mon else mon.get('last_checked_on')
+                            mins_elapsed = (now - last_check).total_seconds() / 60.0
+                            seq = mon['sequence_count'] if 'sequence_count' in mon else mon.get('sequence_count')
                             
-                            overrides = {'triggered_by': 'threshold_breach', 'alert_sequence': new_seq}
-                            payload = _parse_template(template, sp_name, dev_id, overrides)
-                            cursor.execute("INSERT INTO tblDeadLetterQueue (deviceid, payload, targetUrl) VALUES (%s, %s, %s)", (dev_id, payload, target_url))
-                else:
-                    if active_alert:
-                        # 3. RESOLVED ALERT STATE OFFICIALLY
-                        created_on = active_alert['createdon'] if 'createdon' in active_alert else active_alert.get('Createdon')
-                        time_taken = int((now - created_on).total_seconds() / 60.0)
-                        cursor.execute("""
-                            UPDATE tblAlertScheduler 
-                            SET isResolved=1, ResolvedOn=%s, Time_taken=%s 
-                            WHERE slno=%s
-                        """, (now, time_taken, active_alert['slno']))
-                        
-                        overrides = {'triggered_by': 'threshold_resolved', 'alert_sequence': 0}
-                        payload = _parse_template(template, sp_name, dev_id, overrides)
-                        cursor.execute("INSERT INTO tblDeadLetterQueue (deviceid, payload, targetUrl) VALUES (%s, %s, %s)", (dev_id, payload, target_url))
+                            if mins_elapsed >= freq:
+                                seq += 1
+                                slno = mon['slno'] if 'slno' in mon else mon.get('slno')
+                                cursor.execute("UPDATE tblAlertMonitor SET sequence_count=%s, last_checked_on=%s WHERE slno=%s", (seq, now, slno))
+                                needs_dispatch = True
+                                dispatch_type = "threshold_breach"
+                                
+                            out_sequences[p] = seq
+                    else:
+                        if mon:
+                            slno = mon['slno'] if 'slno' in mon else mon.get('slno')
+                            cursor.execute("UPDATE tblAlertMonitor SET is_resolved=TRUE, resolved_on=%s WHERE slno=%s", (now, slno))
+                            newly_resolved_count += 1
+                            out_sequences[p] = 0
+                
+                # Global Resolution Check -> ONLY emit if absolutely zero params are currently bad, and we just resolved something.
+                if newly_resolved_count > 0 and len(active_bads) == 0:
+                    needs_dispatch = True
+                    dispatch_type = "threshold_resolved"
+                    
+                if needs_dispatch:
+                    overrides = {
+                        'triggered_by': dispatch_type,
+                        'tvoc_consecutive_bad': out_sequences['TVOC'],
+                        'pch_consecutive_bad': out_sequences['PCH'],
+                        'pcd_consecutive_bad': out_sequences['PCD']
+                    }
+                    overrides['alert_sequence'] = max(list(out_sequences.values()) + [0])
+                    
+                    payload = _parse_template(template, sp_name, dev_id, overrides)
+                    cursor.execute("INSERT INTO tblDeadLetterQueue (deviceid, payload, targetUrl) VALUES (%s, %s, %s)", (dev_id, payload, target_url))
             
             conn.commit()
     except Exception as e:
@@ -522,6 +573,7 @@ def start_schedulers():
     scheduler.add_job(orchestrate_json_payloads, 'interval', minutes=15)
     scheduler.add_job(evaluate_active_alerts, 'interval', minutes=15)
     scheduler.add_job(process_dlq, 'interval', minutes=2)
+    
     scheduler.add_job(db_cleanup_job, 'cron', hour=0, minute=0)
     scheduler.add_job(disk_cleanup_job, 'cron', hour=0, minute=5) # Runs slightly after DB cleanup
     scheduler.start()

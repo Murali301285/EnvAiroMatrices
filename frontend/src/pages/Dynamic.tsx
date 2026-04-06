@@ -1,11 +1,18 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import axios from 'axios';
 import {
     LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
     XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
 } from 'recharts';
 import html2canvas from 'html2canvas';
-import { Filter, Download, Building2, Cpu, Activity, BarChart3, PieChart as PieIcon, DivideCircle, Edit3, Type, Calculator, ShieldAlert } from 'lucide-react';
+import { Filter, Download, Building2, Cpu, Activity, BarChart3, PieChart as PieIcon, DivideCircle, Edit3, Calculator, ShieldAlert, ChevronUp, ChevronDown, ChevronsLeft, ChevronsRight, ArrowLeft, ArrowRight, Search } from 'lucide-react';
+
+const SortIcon = ({ colKey, config }: { colKey: string, config: any }) => {
+    if (config?.key === colKey) {
+        return config.dir === 'asc' ? <ChevronUp size={14} className="text-indigo-600" /> : <ChevronDown size={14} className="text-indigo-600" />;
+    }
+    return <ChevronDown size={14} className="text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity" />;
+};
 import Select from 'react-select';
 import { toast } from '../utils/toast';
 
@@ -27,7 +34,8 @@ export default function Dynamic() {
     const [deviceParamsCache, setDeviceParamsCache] = useState<Record<string, any[]>>({});
     // Discovered Unified Parameters list
     const [availableParams, setAvailableParams] = useState<string[]>([]);
-    const [selectedParam, setSelectedParam] = useState<string>('');
+    const [selectedParams, setSelectedParams] = useState<any[]>([]);
+    const [activeLines, setActiveLines] = useState<{key: string, color: string}[]>([]);
 
     // ---------------------------------------------------------
     // 2. CHART CONFIGURATION & ANALYTICS STATE
@@ -83,7 +91,7 @@ export default function Dynamic() {
     useEffect(() => {
         if (selectedDevices.length === 0) {
             setAvailableParams([]);
-            setSelectedParam('');
+            setSelectedParams([]);
             return;
         }
 
@@ -121,10 +129,15 @@ export default function Dynamic() {
             setAvailableParams(unionArr);
 
             // Auto-select param if previously selected is invalid or empty
-            if (!unionArr.includes(selectedParam) && unionArr.length > 0) {
-                setSelectedParam(unionArr[0]);
+            const currentSelectedStr = selectedParams.map((p: any) => p.value);
+            const validSelections = currentSelectedStr.filter((s: string) => unionArr.includes(s));
+            
+            if (validSelections.length === 0 && unionArr.length > 0) {
+                setSelectedParams([{ value: unionArr[0], label: unionArr[0] }]);
             } else if (unionArr.length === 0) {
-                setSelectedParam('');
+                setSelectedParams([]);
+            } else if (validSelections.length !== currentSelectedStr.length) {
+                setSelectedParams(validSelections.map((v: string) => ({ value: v, label: v })));
             }
         };
 
@@ -167,7 +180,7 @@ export default function Dynamic() {
     };
 
     const runAnalytics = async () => {
-        if (selectedDevices.length === 0 || !selectedParam) {
+        if (selectedDevices.length === 0 || selectedParams.length === 0) {
             toast.error("Please select devices and a parameter to compare.");
             return;
         }
@@ -187,6 +200,8 @@ export default function Dynamic() {
             // 2. Structuring Algorithm (Grouping points by EXACT normalized minute)
             // { '14:05': { TimeStr: '14:05', 'DevA': 400, 'DevB': 300 } }
             const timelineMap: Record<string, any> = {};
+            const paramLabels = selectedParams.map((p: any) => p.value);
+            const lineTracker = new Map<string, string>(); // mappedKey -> color string
 
             responses.forEach(result => {
                 if (result.status === 'fulfilled' && result.value.payload?.status === 'success') {
@@ -195,17 +210,9 @@ export default function Dynamic() {
                     const seeds = result.value.payload.day_seeds || {};
                     const myParams = deviceParamsCache[devConfig.value] || [];
 
-                    // Find the exact parameter mapping metadata for this device (Decimal bounds, Sum factors)
-                    const mapping = myParams.find(p => p.parametername === selectedParam);
-                    if (!mapping) return; // This device doesn't have this param mapped, ignore it.
+                    const reversedRecords = [...rawRecords].reverse();
 
-                    const upperTag = (mapping.api_rev_tag || '').toUpperCase();
-                    const isSumMetric = mapping.valuefactor === 'Sum' || mapping.ValueFactor === 'Sum' || upperTag === 'IN' || upperTag === 'OUT';
-
-                    const dtype = mapping.datatype || mapping.DataType;
-                    const decimalPlaces = mapping.decimalplaces !== undefined ? mapping.decimalplaces : (mapping.DecimalPlaces !== undefined ? mapping.DecimalPlaces : 2);
-
-                    rawRecords.reverse().forEach((row: any) => {
+                    reversedRecords.forEach((row: any) => {
                         const rText = row.revText || row.revtext || '';
                         const parsed = parseRevText(rText);
 
@@ -214,32 +221,56 @@ export default function Dynamic() {
                         // Grouping key: DD-MM-YYYY HH:mm
                         const timeKey = `${pad(dObj.getDate())}/${pad(dObj.getMonth() + 1)} ${pad(dObj.getHours())}:${pad(dObj.getMinutes())}`;
 
-                        let val = parsed[upperTag] !== undefined ? parsed[upperTag] : null;
-
-                        if (val !== null) {
-                            if (isSumMetric) {
-                                const seedDateKey = `${dObj.getFullYear()}-${pad(dObj.getMonth() + 1)}-${pad(dObj.getDate())}`;
-                                const seedRev = seeds[seedDateKey] || '';
-                                const seedParsed = parseRevText(seedRev);
-                                const seedVal = seedParsed[upperTag] !== undefined ? seedParsed[upperTag] : 0;
-                                val = Math.max(0, Number(val) - Number(seedVal));
-                            }
-
-                            if (dtype === 'Decimal' && typeof val === 'number') {
-                                val = Number(val.toFixed(decimalPlaces));
-                            } else if (dtype === 'Number' && typeof val === 'number') {
-                                val = Math.round(val);
-                            }
-
-                            if (!timelineMap[timeKey]) {
-                                timelineMap[timeKey] = { TimeStr: timeKey };
-                            }
-                            // Insert parsed value locked to the device's exact label for Recharts `<Line dataKey="LABEL">` logic
-                            timelineMap[timeKey][devConfig.label] = val;
+                        if (!timelineMap[timeKey]) {
+                            timelineMap[timeKey] = { TimeStr: timeKey };
                         }
+
+                        paramLabels.forEach(sParam => {
+                            const mapping = myParams.find(p => p.parametername === sParam);
+                            if (!mapping) return; // This device doesn't have this param mapped, ignore it.
+
+                            const upperTag = (mapping.api_rev_tag || '').toUpperCase();
+                            const isSumMetric = mapping.valuefactor === 'Sum' || mapping.ValueFactor === 'Sum' || upperTag === 'IN' || upperTag === 'OUT';
+
+                            const dtype = mapping.datatype || mapping.DataType;
+                            const decimalPlaces = mapping.decimalplaces !== undefined ? mapping.decimalplaces : (mapping.DecimalPlaces !== undefined ? mapping.DecimalPlaces : 2);
+
+                            let val = parsed[upperTag] !== undefined ? parsed[upperTag] : null;
+
+                            if (val !== null) {
+                                if (isSumMetric) {
+                                    const seedDateKey = `${dObj.getFullYear()}-${pad(dObj.getMonth() + 1)}-${pad(dObj.getDate())}`;
+                                    const seedRev = seeds[seedDateKey] || '';
+                                    const seedParsed = parseRevText(seedRev);
+                                    const seedVal = seedParsed[upperTag] !== undefined ? seedParsed[upperTag] : 0;
+                                    val = Math.max(0, Number(val) - Number(seedVal));
+                                }
+
+                                if (dtype === 'Decimal' && typeof val === 'number') {
+                                    val = Number(val.toFixed(decimalPlaces));
+                                } else if (dtype === 'Number' && typeof val === 'number') {
+                                    val = Math.round(val);
+                                }
+
+                                // If both Multi-Device and Multi-Param are active, generate a composite label securely
+                                const mappedKey = (selectedDevices.length > 1 && paramLabels.length > 1) 
+                                                  ? `${devConfig.label} (${sParam})` 
+                                                  : (paramLabels.length > 1 ? sParam : devConfig.label);
+                                                  
+                                timelineMap[timeKey][mappedKey] = val;
+                                
+                                if (!lineTracker.has(mappedKey)) {
+                                    lineTracker.set(mappedKey, mapping.color || mapping.Color || COLORS[lineTracker.size % COLORS.length]);
+                                }
+                            }
+                        });
                     });
                 }
             });
+
+            // Sync Active Lines to State
+            const lines = Array.from(lineTracker.entries()).map(([k, c]) => ({ key: k, color: c }));
+            setActiveLines(lines);
 
             // 3. Time Map arrayification and sorting
             let merged = Object.values(timelineMap);
@@ -259,8 +290,8 @@ export default function Dynamic() {
             if (enableSmoothing && merged.length > 2) {
                 const smoothed = [...merged];
                 for (let i = 1; i < smoothed.length - 1; i++) {
-                    selectedDevices.forEach(dConf => {
-                        const lbl = dConf.label;
+                    lines.forEach(lDef => {
+                        const lbl = lDef.key;
                         if (smoothed[i - 1][lbl] !== undefined && smoothed[i][lbl] !== undefined && smoothed[i + 1][lbl] !== undefined) {
                             const avgTrio = (Number(smoothed[i - 1][lbl]) + Number(smoothed[i][lbl]) + Number(smoothed[i + 1][lbl])) / 3;
                             smoothed[i][lbl] = Number(avgTrio.toFixed(2));
@@ -272,7 +303,7 @@ export default function Dynamic() {
 
             setMergedData(merged);
 
-            // 5. Compute Global Global Statistical Overview Engine
+            // 5. Compute Global Statistical Overview Engine
             let gMax = -Infinity;
             let gMin = Infinity;
             let gSum = 0;
@@ -280,10 +311,10 @@ export default function Dynamic() {
             let gPeakStr = '-';
 
             merged.forEach(row => {
-                selectedDevices.forEach(dConf => {
-                    const vl = row[dConf.label];
+                lines.forEach(lDef => {
+                    const vl = row[lDef.key];
                     if (typeof vl === 'number') {
-                        if (vl > gMax) { gMax = vl; gPeakStr = dConf.label; }
+                        if (vl > gMax) { gMax = vl; gPeakStr = lDef.key; }
                         if (vl < gMin) gMin = vl;
                         gSum += vl;
                         gCount++;
@@ -315,19 +346,19 @@ export default function Dynamic() {
     const pieData = useMemo(() => {
         if (!mergedData.length) return [];
         const result: any[] = [];
-        selectedDevices.forEach(dConf => {
-            const lbl = dConf.label;
+        activeLines.forEach(lDef => {
+            const lbl = lDef.key;
             let sum = 0;
             let count = 0;
             mergedData.forEach(row => {
                 if (typeof row[lbl] === 'number') { sum += row[lbl]; count++; }
             });
             if (count > 0) {
-                result.push({ name: lbl, value: Number((sum / count).toFixed(2)) });
+                result.push({ name: lbl, value: Number((sum / count).toFixed(2)), color: lDef.color });
             }
         });
         return result;
-    }, [mergedData, selectedDevices]);
+    }, [mergedData, activeLines]);
 
     // Export Helper
     const downloadAnalytics = async () => {
@@ -340,9 +371,60 @@ export default function Dynamic() {
         }
     };
 
+    // ---------------------------------------------------------
+    // DYNAMIC DATA TABLE STATE & SORTING
+    // ---------------------------------------------------------
+    const [pageTable, setPageTable] = useState(0);
+    const [rowsTable, setRowsTable] = useState(10);
+    const [sortTable, setSortTable] = useState<{ key: string, dir: 'asc' | 'desc' } | null>(null);
+    const [searchTable, setSearchTable] = useState('');
+
+    const handleSortToggle = (key: string) => {
+        setSortTable(prev => prev?.key === key && prev.dir === 'asc' ? { key, dir: 'desc' } : { key, dir: 'asc' });
+    };
+
+    const sortedMergedData = useMemo(() => {
+        let result = [...mergedData];
+        if (searchTable.trim()) {
+            const q = searchTable.toLowerCase();
+            result = result.filter(r => 
+                r.TimeStr.toLowerCase().includes(q) || activeLines.some(l => String(r[l.key]).toLowerCase().includes(q))
+            );
+        }
+        if (sortTable) {
+            result.sort((a, b) => {
+                const aVal = a[sortTable.key] !== undefined ? a[sortTable.key] : '';
+                const bVal = b[sortTable.key] !== undefined ? b[sortTable.key] : '';
+                if (aVal < bVal) return sortTable.dir === 'asc' ? -1 : 1;
+                if (aVal > bVal) return sortTable.dir === 'asc' ? 1 : -1;
+                return 0;
+            });
+        }
+        return result;
+    }, [mergedData, searchTable, sortTable, activeLines]);
+
+    const pageTableData = sortedMergedData.slice(pageTable * rowsTable, (pageTable + 1) * rowsTable);
+
+    const handleDownloadExcel = () => {
+        if (!sortedMergedData.length) return;
+        const keys = ['TimeStr', ...activeLines.map(l => l.key)];
+        let csvContent = "data:text/csv;charset=utf-8,Sl No," + keys.join(",") + "\n";
+        sortedMergedData.forEach((row, i) => {
+            let rowCols = [i + 1, ...keys.map(k => `"${row[k] !== undefined ? row[k] : ''}"`)];
+            csvContent += rowCols.join(",") + "\n";
+        });
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", `${chartTitle.replace(/[^a-zA-Z0-9]/g, '_')}_DataTable.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
+
     const selectStyles = {
         control: (base: any) => ({ ...base, borderColor: '#e2e8f0', borderRadius: '0.5rem', minHeight: '38px', boxShadow: 'none', backgroundColor: '#f8fafc', '&:hover': { borderColor: '#cbd5e1' } }),
-        menu: (base: any, state: any) => ({ ...base, zIndex: 9999 }),
+        menu: (base: any, _state: any) => ({ ...base, zIndex: 9999 }),
         multiValue: (base: any) => ({ ...base, backgroundColor: '#e0e7ff', borderRadius: '4px' }),
         multiValueLabel: (base: any) => ({ ...base, color: '#3730a3', fontWeight: 'bold' }),
     };
@@ -351,7 +433,7 @@ export default function Dynamic() {
         <div className="flex flex-col h-[calc(100vh-64px)] overflow-y-auto px-2 md:px-6 pb-20 w-full animation-fade-in bg-slate-50/50">
 
             {/* HEADER BUILDER PANEL */}
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm mb-6 flex flex-col pt-4 px-6 pb-6">
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm mb-6 flex flex-col pt-4 px-6 pb-6 shrink-0">
                 <div className="flex items-center gap-2 mb-4 pb-2 border-b border-slate-100">
                     <Filter className="text-indigo-500" size={18} />
                     <h2 className="text-lg font-bold text-slate-800 tracking-tight">Dynamic Analytics Builder</h2>
@@ -371,17 +453,23 @@ export default function Dynamic() {
                         <Select isMulti options={filteredDeviceOptions} value={selectedDevices} onChange={(val: any) => setSelectedDevices(val)} placeholder="Select Multiple Devices to Map..." isClearable styles={selectStyles} />
                     </div>
 
-                    <div className="flex flex-col gap-1.5 w-full">
+                    <div className="flex flex-col gap-1.5 w-full relative z-[45]">
                         <label className="text-xs font-bold tracking-wide text-slate-500 uppercase flex items-center gap-1.5"><Activity size={12} /> Analysis Parameter</label>
-                        <select
-                            value={selectedParam}
-                            onChange={e => setSelectedParam(e.target.value)}
-                            disabled={availableParams.length === 0}
-                            className="border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 bg-slate-50 outline-none focus:border-indigo-500 disabled:opacity-50 disabled:bg-slate-100 font-semibold h-[38px] cursor-pointer"
-                        >
-                            <option value="">{availableParams.length > 0 ? "Select Parameter..." : "Awaiting Devices..."}</option>
-                            {availableParams.map(p => <option key={p} value={p}>{p}</option>)}
-                        </select>
+                        <Select
+                            isMulti
+                            options={availableParams.map(p => ({ value: p, label: p }))}
+                            value={selectedParams}
+                            onChange={(val: any) => setSelectedParams(val || [])}
+                            isDisabled={availableParams.length === 0}
+                            placeholder={availableParams.length > 0 ? "Select Parameters..." : "Awaiting Devices..."}
+                            styles={{
+                                control: (base: any, state: any) => ({
+                                    ...base, minHeight: '38px', borderRadius: '0.5rem', borderColor: state.isFocused ? '#6366f1' : '#e2e8f0', boxShadow: state.isFocused ? '0 0 0 1px #6366f1' : 'none', '&:hover': {borderColor: '#cbd5e1'}
+                                }),
+                                valueContainer: (base: any) => ({ ...base, padding: '0 8px' }),
+                                input: (base: any) => ({ ...base, margin: 0, padding: 0 }),
+                            }}
+                        />
                     </div>
 
                     <div className="flex flex-col gap-1.5 w-full">
@@ -408,7 +496,7 @@ export default function Dynamic() {
                     <div className="w-full">
                         <button
                             onClick={runAnalytics}
-                            disabled={loading || selectedDevices.length === 0 || !selectedParam}
+                            disabled={loading || !selectedDevices || selectedDevices.length === 0 || !selectedParams || selectedParams.length === 0}
                             className="w-full bg-gradient-to-r from-indigo-600 to-indigo-800 hover:from-indigo-500 hover:to-indigo-700 text-white font-bold px-6 py-2 rounded-lg flex items-center justify-center gap-2 transition-all shadow-md shadow-indigo-500/20 disabled:opacity-50 disabled:cursor-not-allowed h-[38px]"
                         >
                             <Calculator size={16} className={loading ? 'animate-spin' : ''} /> {loading ? 'Compiling Matrices...' : 'Compile Analytics'}
@@ -419,7 +507,8 @@ export default function Dynamic() {
 
             {/* DYNAMIC RENDERING PANEL */}
             {mergedData.length > 0 && (
-                <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm flex flex-col mb-6" ref={chartRef}>
+                <>
+                <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm flex flex-col mb-6 shrink-0" ref={chartRef}>
                     
                     {/* Custom Title System */}
                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
@@ -502,8 +591,8 @@ export default function Dynamic() {
                                     <YAxis tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
                                     <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 20px rgba(0,0,0,0.08)' }} />
                                     <Legend verticalAlign="top" height={40} iconType="plainline" />
-                                    {selectedDevices.map((d, i) => (
-                                        <Line key={d.value} type="monotone" dataKey={d.label} stroke={COLORS[i % COLORS.length]} strokeWidth={3} dot={false} activeDot={{ r: 6, strokeWidth: 0 }} />
+                                    {activeLines.map((lDef) => (
+                                        <Line key={lDef.key} type="monotone" dataKey={lDef.key} stroke={lDef.color} strokeWidth={3} dot={false} activeDot={{ r: 6, strokeWidth: 0 }} />
                                     ))}
                                 </LineChart>
                             ) : chartType === 'bar' ? (
@@ -513,13 +602,13 @@ export default function Dynamic() {
                                     <YAxis tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
                                     <Tooltip cursor={{ fill: '#f1f5f9' }} contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 20px rgba(0,0,0,0.08)' }} />
                                     <Legend verticalAlign="top" height={40} />
-                                    {selectedDevices.map((d, i) => {
+                                    {activeLines.map((lDef) => {
                                         const tFloat = parseFloat(heatmapThreshold);
                                         const useHeat = !isNaN(tFloat);
                                         return (
-                                            <Bar key={d.value} dataKey={d.label} fill={COLORS[i % COLORS.length]} radius={[4, 4, 0, 0]} maxBarSize={60}>
+                                            <Bar key={lDef.key} dataKey={lDef.key} fill={lDef.color} radius={[4, 4, 0, 0]} maxBarSize={60}>
                                                 {mergedData.map((entry, index) => (
-                                                    <Cell key={`cell-${index}`} fill={useHeat && entry[d.label] >= tFloat ? '#ef4444' : COLORS[i % COLORS.length]} />
+                                                    <Cell key={`cell-${index}`} fill={useHeat && entry[lDef.key] >= tFloat ? '#ef4444' : lDef.color} />
                                                 ))}
                                             </Bar>
                                         );
@@ -538,12 +627,12 @@ export default function Dynamic() {
                                         cy="50%"
                                         outerRadius={160}
                                         innerRadius={chartType === 'donut' ? 100 : 0}
-                                        label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
+                                        label={({ name, percent }) => `${name} (${((percent || 0) * 100).toFixed(0)}%)`}
                                         labelLine={true}
                                         paddingAngle={chartType === 'donut' ? 4 : 0}
                                     >
                                         {pieData.map((entry, index) => (
-                                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} stroke="rgba(255,255,255,0.5)" strokeWidth={2} />
+                                            <Cell key={`cell-${index}`} fill={entry.color || COLORS[index % COLORS.length]} stroke="rgba(255,255,255,0.5)" strokeWidth={2} />
                                         ))}
                                     </Pie>
                                 </PieChart>
@@ -558,6 +647,84 @@ export default function Dynamic() {
                     </div>
 
                 </div>
+
+                {/* DYNAMIC METADATA GRID */}
+                <div className="mt-8 bg-white rounded-2xl border border-slate-100 shadow-sm p-6 overflow-hidden flex flex-col shrink-0">
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-4">
+                        <h3 className="text-xl font-bold text-slate-800">Analysis Data Table ({sortedMergedData.length} rows)</h3>
+                        <div className="flex items-center gap-3 w-full md:w-auto">
+                            <div className="relative">
+                                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" size={16} />
+                                <input type="text" placeholder="Search trace data..." value={searchTable} onChange={(e) => { setSearchTable(e.target.value); setPageTable(0); }} className="pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm w-56 focus:outline-none focus:border-indigo-500" />
+                            </div>
+                            <button onClick={handleDownloadExcel} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-600 font-semibold px-4 py-2 rounded-lg text-sm flex items-center gap-2 transition-colors border border-emerald-100">
+                                <Download size={14} /> Export CSV
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="overflow-x-auto rounded-lg border border-slate-200">
+                        <table className="w-full text-left border-collapse text-sm">
+                            <thead className="bg-slate-50 border-b border-slate-200 text-slate-600">
+                                <tr>
+                                    <th className="px-4 py-4 font-semibold w-16">Sl No</th>
+                                    <th onClick={() => handleSortToggle('TimeStr')} className="px-4 py-4 cursor-pointer select-none group hover:bg-slate-100 transition-colors w-40">
+                                        <div className="flex items-center gap-1.5 break-normal whitespace-nowrap">Time Record <SortIcon colKey="TimeStr" config={sortTable} /></div>
+                                    </th>
+                                    {activeLines.map(lDef => (
+                                        <th key={lDef.key} onClick={() => handleSortToggle(lDef.key)} className="px-4 py-4 cursor-pointer select-none group hover:bg-slate-100 transition-colors" style={{ color: lDef.color }}>
+                                            <div className="flex items-center gap-1.5 break-normal whitespace-nowrap">{lDef.key} <SortIcon colKey={lDef.key} config={sortTable} /></div>
+                                        </th>
+                                    ))}
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {pageTableData.map((d, i) => (
+                                    <tr key={i} className="hover:bg-indigo-50/50 transition-colors group">
+                                        <td className="px-4 py-3 text-slate-500">{pageTable * rowsTable + i + 1}</td>
+                                        <td className="px-4 py-3 text-slate-700 font-medium">{d.TimeStr}</td>
+                                        {activeLines.map(lDef => (
+                                            <td key={lDef.key} className="px-4 py-3 font-semibold" style={{ color: lDef.color }}>
+                                                {d[lDef.key] !== undefined ? d[lDef.key] : '-'}
+                                            </td>
+                                        ))}
+                                    </tr>
+                                ))}
+                                {pageTableData.length === 0 && (
+                                    <tr>
+                                        <td colSpan={activeLines.length + 2} className="px-4 py-12 text-center text-slate-500 bg-slate-50 border-t border-slate-100">
+                                            No tracking records discovered for this boundary.
+                                        </td>
+                                    </tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    {/* Pagination */}
+                    <div className="flex items-center justify-between mt-4 text-sm px-2">
+                        <select className="border border-slate-200 rounded px-2 py-1 outline-none font-medium text-slate-600 bg-white" value={rowsTable} onChange={e => { setRowsTable(Number(e.target.value)); setPageTable(0) }}>
+                            <option value={10}>10 records / page</option>
+                            <option value={20}>20 records / page</option>
+                            <option value={50}>50 records / page</option>
+                            <option value={100}>100 records / page</option>
+                            <option value={mergedData.length}>All Traces</option>
+                        </select>
+
+                        <div className="flex items-center gap-4">
+                            <div className="flex gap-2">
+                                <button onClick={() => setPageTable(0)} disabled={pageTable === 0} className="hover:text-indigo-600 disabled:opacity-30 p-1"><ChevronsLeft size={16} /></button>
+                                <button onClick={() => setPageTable(p => Math.max(0, p - 1))} disabled={pageTable === 0} className="hover:text-indigo-600 disabled:opacity-30 p-1"><ArrowLeft size={16} /></button>
+                            </div>
+                            <span className="font-semibold text-slate-700">Page {pageTable + 1} of {Math.ceil(sortedMergedData.length / rowsTable) || 1}</span>
+                            <div className="flex gap-2">
+                                <button onClick={() => setPageTable(p => Math.min(Math.ceil(sortedMergedData.length / rowsTable) - 1, p + 1))} disabled={pageTable >= Math.ceil(sortedMergedData.length / rowsTable) - 1} className="hover:text-indigo-600 disabled:opacity-30 p-1"><ArrowRight size={16} /></button>
+                                <button onClick={() => setPageTable(Math.max(0, Math.ceil(sortedMergedData.length / rowsTable) - 1))} disabled={pageTable >= Math.ceil(sortedMergedData.length / rowsTable) - 1} className="hover:text-indigo-600 disabled:opacity-30 p-1"><ChevronsRight size={16} /></button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                </>
             )}
         </div>
     );

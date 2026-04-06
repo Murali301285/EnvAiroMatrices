@@ -1,7 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 import { FileJson, Plus, AlertCircle, Edit2, Trash2, X, Braces, Download } from 'lucide-react';
 import { toast } from 'react-toastify';
+import type { ColumnDef } from '@tanstack/react-table';
+import DataTable from '../components/DataTable';
 
 export default function Formatters() {
     const [formatters, setFormatters] = useState<any[]>([]);
@@ -28,10 +30,45 @@ export default function Formatters() {
     const [historyLogs, setHistoryLogs] = useState<any[]>([]);
     const [histCompany, setHistCompany] = useState("");
     const [histDevice, setHistDevice] = useState("");
-    const [histFrom, setHistFrom] = useState("");
-    const [histTo, setHistTo] = useState("");
+    const [histPayloadType, setHistPayloadType] = useState('All');
+    const [histFrom, setHistFrom] = useState(new Date().toISOString().split('T')[0]);
+    const [histTo, setHistTo] = useState(new Date().toISOString().split('T')[0]);
     const [histLoading, setHistLoading] = useState(false);
     const [histPayloadModal, setHistPayloadModal] = useState<any>(null);
+
+    const histColumns = useMemo<ColumnDef<any, any>[]>(() => [
+        {
+            accessorKey: 'payload_type',
+            header: 'Type',
+            cell: info => <span className={`px-2.5 py-1 rounded-md text-xs font-bold tracking-wide ${(info.getValue() as string) === 'Alert' ? 'bg-rose-100 text-rose-700' : (info.getValue() as string) === 'Resolved' ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'}`}>{info.getValue() as string || 'Scheduled'}</span>
+        },
+        {
+            accessorKey: 'created_at',
+            header: 'Generation Time',
+            cell: info => <span className="font-mono text-slate-600">{new Date(info.getValue() as string).toLocaleString()}</span>
+        },
+        {
+            id: 'company',
+            header: 'Company',
+            accessorFn: row => row.customerName || row.customername || 'N/A',
+            cell: info => <span className="text-slate-700 font-bold tracking-wide">{info.getValue() as string}</span>
+        },
+        {
+            accessorKey: 'deviceid',
+            header: 'Device ID',
+            cell: info => <span className="px-2.5 py-1 bg-slate-100 border border-slate-200 text-slate-600 rounded font-mono text-xs">{info.getValue() as string}</span>
+        },
+        {
+            id: 'actions',
+            header: 'Payload Inspector',
+            enableSorting: false,
+            cell: info => (
+                <button onClick={() => setHistPayloadModal(info.row.original)} className="text-indigo-600 hover:text-white bg-indigo-50 hover:bg-indigo-500 border border-indigo-200 hover:border-indigo-600 px-3 py-1.5 rounded text-xs font-bold transition-colors shadow-sm">
+                    View Mapping
+                </button>
+            )
+        }
+    ], []);
 
     useEffect(() => {
         if (!formJson.trim()) {
@@ -67,6 +104,8 @@ export default function Formatters() {
         if (histDevice) params.append('device_id', histDevice);
         if (histFrom) params.append('from_date', histFrom);
         if (histTo) params.append('to_date', histTo);
+        if (histPayloadType && histPayloadType !== 'All') params.append('payload_type', histPayloadType);
+        params.append('limit', '2000'); // Increase physical cap internally; datatable handles the chunking.
         
         axios.get(`http://${window.location.hostname}:8381/api/dashboard/json-history?${params.toString()}`)
             .then(res => setHistoryLogs(res.data?.data || []))
@@ -431,40 +470,29 @@ export default function Formatters() {
                         <input type="date" value={histFrom} onChange={e => setHistFrom(e.target.value)} className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm outline-none text-slate-600" />
                         <span className="text-slate-400 text-sm">to</span>
                         <input type="date" value={histTo} onChange={e => setHistTo(e.target.value)} className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm outline-none text-slate-600" />
+                        <select value={histPayloadType} onChange={e => setHistPayloadType(e.target.value)} className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm outline-none bg-white text-slate-700">
+                            <option value="All">All Types</option>
+                            <option value="Scheduled">Scheduled</option>
+                            <option value="Alert">Alert</option>
+                            <option value="Resolved">Resolved</option>
+                        </select>
                         <button onClick={fetchHistoryLogs} className="bg-indigo-600 text-white px-4 py-1.5 rounded-lg text-sm font-semibold hover:bg-indigo-500 transition-colors shadow-sm shadow-indigo-500/20">Filter</button>
                     </div>
                 </div>
-                <div className="flex-1 overflow-auto bg-slate-50/30">
-                    <table className="w-full text-left text-sm whitespace-nowrap">
-                        <thead className="bg-slate-100 sticky top-0 z-10 shadow-sm shadow-slate-200/50">
-                            <tr className="text-slate-500 font-semibold text-xs tracking-wider uppercase">
-                                <th className="px-6 py-4">Generation Time</th>
-                                <th className="px-6 py-4">Company</th>
-                                <th className="px-6 py-4">Device ID</th>
-                                <th className="px-6 py-4">Payload Inspector</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100/80">
-                            {histLoading ? (
-                                <tr><td colSpan={4} className="px-6 py-12 text-center text-slate-400 animate-pulse font-medium">Fetching history blocks...</td></tr>
-                            ) : historyLogs.length === 0 ? (
-                                <tr><td colSpan={4} className="px-6 py-12 text-center text-slate-400">No JSON payloads generated in this period.</td></tr>
-                            ) : historyLogs.map((log: any) => (
-                                <tr key={log.slno} className="hover:bg-slate-50 transition-colors group">
-                                    <td className="px-6 py-3 font-mono text-slate-600">{new Date(log.created_at).toLocaleString()}</td>
-                                    <td className="px-6 py-3 text-slate-700 font-medium">{log.customerName || log.customername || 'N/A'}</td>
-                                    <td className="px-6 py-3">
-                                        <span className="px-2 py-1 bg-slate-100 text-slate-600 rounded font-mono text-xs">{log.deviceid}</span>
-                                    </td>
-                                    <td className="px-6 py-3">
-                                        <button onClick={() => setHistPayloadModal(log)} className="text-indigo-600 hover:text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded text-xs font-bold transition-colors">
-                                            View Mapping
-                                        </button>
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
+                <div className="flex-1 overflow-auto bg-slate-50/30 p-4">
+                    {histLoading ? (
+                        <div className="flex flex-col items-center justify-center py-12 text-slate-400 gap-3">
+                            <AlertCircle size={32} className="animate-pulse text-indigo-400" />
+                            <span className="text-sm font-semibold tracking-wide">Fetching history blocks...</span>
+                        </div>
+                    ) : (
+                        <DataTable 
+                            columns={histColumns} 
+                            data={historyLogs} 
+                            exportFilename="Generated_JSON_Transmissions"
+                            searchPlaceholder="Search history by device or payload..."
+                        />
+                    )}
                 </div>
             </div>
 
