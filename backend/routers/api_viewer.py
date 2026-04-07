@@ -154,7 +154,7 @@ def get_scheduled_json_history(
             """
             params = []
             if company:
-                query += " AND c.customerName = %s"
+                query += " AND c.customer_code = %s"
                 params.append(company)
             if device_id:
                 query += " AND h.deviceid = %s"

@@ -1,17 +1,17 @@
 CREATE OR REPLACE FUNCTION public.sp_get_woloo_schjsoncreator(p_deviceid character varying)
- RETURNS TABLE(client character varying, deviceid character varying, alias character varying, location character varying, datetime character varying, startdtime character varying, triggered_by character varying, parameters character varying, hours boolean, alert_sequence integer, tvoc_value numeric, tvoc_unit character varying, tvoc_con character varying, tvoc_avg numeric, tvoc_max numeric, tvoc_min numeric, tvoc_bad numeric, pcd numeric, pcd_max numeric, pcd_bad numeric, pch json, pch_avg numeric, pch_max numeric, pch_bad numeric, "time" character varying, hum numeric, temp numeric, temp_unit character varying)
+ RETURNS TABLE(client character varying, deviceid character varying, alias character varying, location character varying, datetime character varying, startdtime character varying, triggered_by character varying, parameters character varying, hours boolean, alert_sequence integer, tvoc json, tvoc_avg numeric, tvoc_max numeric, tvoc_min numeric, tvoc_bad numeric, pcd numeric, pcd_max numeric, pcd_bad numeric, pch json, pch_avg numeric, pch_max numeric, pch_bad numeric, "time" character varying, hum numeric, temp numeric, temp_unit character varying)
  LANGUAGE plpgsql
 AS $function$
             DECLARE
-                v_tvoc_param_tag VARCHAR := 'SH2S';
+                v_tvoc_param_tag VARCHAR := 'VOC';
                 v_current_time TIMESTAMP := CURRENT_TIMESTAMP;
                 v_window_start TIMESTAMP;
                 v_latest_timestamp TIMESTAMP;
             BEGIN
-                SELECT created_at INTO v_latest_timestamp
-                FROM tblminutedetails
-                WHERE tblminutedetails.deviceid = p_deviceid
-                ORDER BY created_at DESC
+                SELECT r.receivedOn INTO v_latest_timestamp
+                FROM public.tbldatareceiver r
+                WHERE r.deviceid = p_deviceid
+                ORDER BY r.slno DESC
                 LIMIT 1;
 
                 IF v_latest_timestamp IS NULL THEN
@@ -21,7 +21,26 @@ AS $function$
                 v_window_start := date_trunc('hour', v_current_time);
 
                 RETURN QUERY
-                WITH device_info AS (
+                WITH tblminutedetails AS (
+                    SELECT 
+                        r.deviceid,
+                        r.receivedOn AS created_at,
+                        jsonb_build_object(
+                            'VOC', NULLIF(SUBSTRING(r.revText FROM 'VOC:([-0-9.]+)'), ''),
+                            'SH2S', NULLIF(SUBSTRING(r.revText FROM 'SH2S:([-0-9.]+)'), ''),
+                            'HYGIENE', NULLIF(SUBSTRING(r.revText FROM 'HYGIENE:([-0-9.]+)'), ''),
+                            'STATUS', NULLIF(SUBSTRING(r.revText FROM 'STATUS:([a-zA-Z]+)'), ''),
+                            'HUM', NULLIF(SUBSTRING(r.revText FROM 'HUM:([-0-9.]+)'), ''),
+                            'TMP', NULLIF(SUBSTRING(r.revText FROM 'TMP:([-0-9.]+)'), ''),
+                            'IN', NULLIF(SUBSTRING(r.revText FROM 'IN:([-0-9.]+)'), ''),
+                            'OUT', NULLIF(SUBSTRING(r.revText FROM 'OUT:([-0-9.]+)'), ''),
+                            'OUT_RAW', COALESCE(NULLIF(SUBSTRING(r.revText FROM 'OUT_RAW:([-0-9.]+)'), ''), NULLIF(SUBSTRING(r.revText FROM 'OUT:([-0-9.]+)'), ''))
+                        ) AS metrics
+                    FROM public.tbldatareceiver r
+                    WHERE r.deviceid = p_deviceid 
+                      AND r.receivedOn >= date_trunc('day', v_latest_timestamp) - INTERVAL '2 days'
+                ),
+                device_info AS (
                     SELECT 
                         COALESCE(c.customerName, '') AS client,
                         d.deviceid,
@@ -43,7 +62,10 @@ AS $function$
                 ),
                 latest_metrics AS (
                     SELECT 
-                        (metrics->>v_tvoc_param_tag)::NUMERIC AS tvoc_val,
+                        (metrics->>'VOC')::NUMERIC AS voc_val,
+                        (metrics->>'SH2S')::NUMERIC AS sh2s_val,
+                        (metrics->>'HYGIENE')::NUMERIC AS hygiene_val,
+                        (metrics->>'STATUS')::VARCHAR AS status_val,
                         (metrics->>'HUM')::NUMERIC AS hum_val,
                         (metrics->>'TMP')::NUMERIC AS temp_val
                     FROM tblminutedetails 
@@ -53,8 +75,8 @@ AS $function$
                 hourly_aggregations AS (
                     SELECT 
                         ROUND(COALESCE(AVG((metrics->>v_tvoc_param_tag)::NUMERIC), 0), 2) AS tvoc_avg,
-                        COALESCE(MAX((metrics->>v_tvoc_param_tag)::NUMERIC), 0) AS tvoc_max,
-                        COALESCE(MIN((metrics->>v_tvoc_param_tag)::NUMERIC), 0) AS tvoc_min,
+                        ROUND(COALESCE(MAX((metrics->>v_tvoc_param_tag)::NUMERIC), 0), 2) AS tvoc_max,
+                        ROUND(COALESCE(MIN((metrics->>v_tvoc_param_tag)::NUMERIC), 0), 2) AS tvoc_min,
                         COALESCE(MAX((metrics->>'IN')::NUMERIC), 0) AS in_max,
                         COALESCE(MIN((metrics->>'IN')::NUMERIC), 0) AS in_min,
                         COALESCE(MAX((metrics->>'OUT')::NUMERIC), 0) AS out_max,
@@ -94,7 +116,7 @@ AS $function$
                 tvoc_evaluations AS (
                     SELECT 
                         m.created_at,
-                        UPPER(fn_evaluate_status(COALESCE((m.metrics->>v_tvoc_param_tag)::NUMERIC, 0), tm.conditions)) AS status
+                        UPPER(COALESCE(m.metrics->>'STATUS', 'UNKNOWN')) AS status
                     FROM tblminutedetails m
                     CROSS JOIN tvoc_metadata tm
                     WHERE m.deviceid = p_deviceid 
@@ -137,9 +159,13 @@ AS $function$
                     )::BOOLEAN AS hours,
                     0::INTEGER AS alert_sequence,
                     
-                    COALESCE(lm.tvoc_val, 0)::NUMERIC AS tvoc_value,
-                    COALESCE(tm.unit, '')::VARCHAR AS tvoc_unit,
-                    fn_evaluate_status(COALESCE(lm.tvoc_val, 0)::NUMERIC, tm.conditions)::VARCHAR AS tvoc_Con,
+                    json_build_object(
+                         'value', ROUND(COALESCE(lm.voc_val, 0)::NUMERIC, 2),
+                         'odour_value', ROUND(COALESCE(lm.sh2s_val, 0)::NUMERIC, 2),
+                         'unit', 'ppm',
+                         'condition', COALESCE(lm.status_val, 'UNKNOWN'),
+                         'hygiene_score', ROUND(COALESCE(lm.hygiene_val, 0)::NUMERIC, 2)
+                    )::JSON AS tvoc,
                     
                     ha.tvoc_avg::NUMERIC,
                     ha.tvoc_max::NUMERIC,
@@ -156,8 +182,8 @@ AS $function$
                          'pch_in', GREATEST(0, ha.in_max - ha.in_min),
                          'condition', 'GOOD'
                     )::JSON AS pch,
-                    (ha.out_start - ha.out_avg)::NUMERIC AS pch_Avg,
-                    (ha.out_start - ha.out_max)::NUMERIC AS pch_max,
+                    GREATEST(0, ha.out_avg - ha.out_start)::NUMERIC AS pch_Avg,
+                    GREATEST(0, ha.out_max - ha.out_start)::NUMERIC AS pch_max,
                     0::NUMERIC AS pch_bad,
                     
                     to_char(v_latest_timestamp, 'HH24')::VARCHAR AS "time",

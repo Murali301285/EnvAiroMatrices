@@ -192,7 +192,9 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                     processedLogs.forEach((log: any) => {
                         Object.keys(log).forEach(k => {
                             if (!['slno', 'mapped_slno', 'deviceid', 'created_at', 'payload_type', 'json_payload', 'customername'].includes(k)) {
-                                dynamicKeys.add(k);
+                                if (!k.toLowerCase().startsWith('hygiene')) {
+                                    dynamicKeys.add(k);
+                                }
                             }
                         });
                     });
@@ -207,7 +209,6 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                     }));
 
                     const baseCols: ColumnDef<any, any>[] = [
-                        { accessorKey: 'mapped_slno', header: 'SLNo', cell: (info: any) => <span className="text-slate-500 font-medium px-2">{info.getValue() as number}</span> },
                         { accessorKey: 'deviceid', header: 'Device ID', cell: (info: any) => <span className="text-sky-600 font-bold tracking-wide">{info.getValue() as string}</span> },
                         { accessorKey: 'created_at', header: 'Datetime', cell: (info: any) => <span className="text-slate-500 font-mono text-[11px] whitespace-nowrap">{new Date(info.getValue() as string).toLocaleString()}</span> },
                         { accessorKey: 'payload_type', header: 'Type', cell: (info: any) => <span className={`px-2 py-0.5 rounded text-[10px] font-bold tracking-wider uppercase ${info.getValue() === 'Alert' ? 'bg-rose-100 text-rose-700' : info.getValue() === 'Resolved' ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'}`}>{info.getValue() as string || 'Scheduled'}</span> }
@@ -812,7 +813,7 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                     </div>
                 </div>
                 {isJsonDataOpen && (
-                    <div className="border border-slate-200 rounded-xl overflow-hidden w-full bg-slate-50 min-h-[400px]">
+                    <div className="border border-slate-200 rounded-xl overflow-hidden w-full bg-slate-50 h-[600px]">
                     <DataTable 
                          columns={jsonColumns} 
                          data={jsonHistoryLogs} 

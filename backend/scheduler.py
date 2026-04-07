@@ -87,19 +87,23 @@ def orchestrate_json_payloads():
     try:
         with conn.cursor() as cursor:
             # 1. Look for un-processed IoT data
-            cursor.execute("SELECT slno, deviceid, revText, receivedOn FROM tblDatareceiver WHERE isProcessed=0 LIMIT 50")
+            cursor.execute("SELECT slno, deviceid, revText, receivedOn FROM tblDatareceiver WHERE isProcessed=0 LIMIT 5000")
             unprocessed = cursor.fetchall()
             
+            if not unprocessed:
+                return
+                
             # Map devices already executed in this interval to prevent massive duplicate JSON spam
             orchestrated_devices = set()
+            processed_slnos = []
             
             for row in unprocessed:
                 slno = row['slno']
                 dev_id = row['deviceid']
+                processed_slnos.append(slno)
                 
                 # If we've already transmitted & built this payload in this cycle, silently mark block processed to exhaust the queue safely
                 if dev_id in orchestrated_devices:
-                    cursor.execute("UPDATE tblDatareceiver SET isProcessed=1, processedOn=NOW() WHERE slno=%s", (slno,))
                     continue
                 
                 # Fetch formatter securely inheriting via Company definition && Check Output Folder Name
@@ -118,7 +122,6 @@ def orchestrate_json_payloads():
                     
                     if is_active is False:
                         # Safely drop processing queue without triggering execution
-                        cursor.execute("UPDATE tblDatareceiver SET isProcessed=1, processedOn=NOW() WHERE slno=%s", (slno,))
                         continue
 
                     template = formatter.get('jsontemplate') or formatter.get('jsonTemplate')
@@ -159,9 +162,11 @@ def orchestrate_json_payloads():
                         if schedule_id:
                             cursor.execute("UPDATE tblScheduler SET last_run = NOW() WHERE slno=%s", (schedule_id,))
                                       
-                # Mark as processed
-                cursor.execute("UPDATE tblDatareceiver SET isProcessed=1, processedOn=NOW() WHERE slno=%s", (slno,))
                 orchestrated_devices.add(dev_id)
+                
+            # Batch update ALL the processed rows natively at the end of the generator loop once
+            if processed_slnos:
+                cursor.execute("UPDATE tblDatareceiver SET isProcessed=1, processedOn=NOW() WHERE slno = ANY(%s)", (processed_slnos,))
             conn.commit()
     except Exception as e:
         print(f"Orchestration Error: {e}")
@@ -570,8 +575,8 @@ def evaluate_active_alerts():
 
 def start_schedulers():
     scheduler = BackgroundScheduler()
-    scheduler.add_job(orchestrate_json_payloads, 'interval', minutes=15)
-    scheduler.add_job(evaluate_active_alerts, 'interval', minutes=15)
+    scheduler.add_job(orchestrate_json_payloads, 'cron', minute='14,29,44,59')
+    scheduler.add_job(evaluate_active_alerts, 'cron', minute='14,29,44,59')
     scheduler.add_job(process_dlq, 'interval', minutes=2)
     
     scheduler.add_job(db_cleanup_job, 'cron', hour=0, minute=0)

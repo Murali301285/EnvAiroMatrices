@@ -35,6 +35,7 @@ export default function Formatters() {
     const [histTo, setHistTo] = useState(new Date().toISOString().split('T')[0]);
     const [histLoading, setHistLoading] = useState(false);
     const [histPayloadModal, setHistPayloadModal] = useState<any>(null);
+    const [autoRefresh, setAutoRefresh] = useState(false);
 
     const histColumns = useMemo<ColumnDef<any, any>[]>(() => [
         {
@@ -45,7 +46,12 @@ export default function Formatters() {
         {
             accessorKey: 'created_at',
             header: 'Generation Time',
-            cell: info => <span className="font-mono text-slate-600">{new Date(info.getValue() as string).toLocaleString()}</span>
+            cell: info => {
+                const d = new Date(info.getValue() as string);
+                const pad = (n: number) => n.toString().padStart(2, '0');
+                const dateStr = `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
+                return <span className="font-mono text-slate-600">{dateStr}, {d.toLocaleTimeString()}</span>;
+            }
         },
         {
             id: 'company',
@@ -117,6 +123,18 @@ export default function Formatters() {
         fetchFormatters();
         fetchHistoryLogs();
     }, []);
+
+    useEffect(() => {
+        let interval: ReturnType<typeof setInterval>;
+        if (autoRefresh) {
+            interval = setInterval(() => {
+                fetchHistoryLogs();
+            }, 300000); // 5 minutes
+        }
+        return () => {
+            if (interval) clearInterval(interval);
+        };
+    }, [autoRefresh, histCompany, histDevice, histFrom, histTo, histPayloadType]);
 
     const handlePrettify = () => {
         try {
@@ -477,6 +495,11 @@ export default function Formatters() {
                             <option value="Resolved">Resolved</option>
                         </select>
                         <button onClick={fetchHistoryLogs} className="bg-indigo-600 text-white px-4 py-1.5 rounded-lg text-sm font-semibold hover:bg-indigo-500 transition-colors shadow-sm shadow-indigo-500/20">Filter</button>
+                        <button onClick={fetchHistoryLogs} className="bg-sky-600 text-white px-4 py-1.5 rounded-lg text-sm font-semibold hover:bg-sky-500 transition-colors shadow-sm shadow-sky-500/20 ml-2">Refresh</button>
+                        <label className="flex items-center gap-2 text-sm font-semibold text-slate-600 cursor-pointer pl-1">
+                            <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} className="rounded border-slate-300 text-sky-600 focus:ring-sky-500 w-4 h-4 cursor-pointer" />
+                            Auto Refresh
+                        </label>
                     </div>
                 </div>
                 <div className="flex-1 overflow-auto bg-slate-50/30 p-4">

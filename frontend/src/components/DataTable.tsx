@@ -104,7 +104,7 @@ export default function DataTable<T>({
 
             {/* Scrollable Table Area */}
             <div className="flex-1 overflow-auto">
-                <table className="w-full text-left text-sm text-slate-600 whitespace-nowrap">
+                <table className="w-full min-w-max text-left text-sm text-slate-600 whitespace-nowrap">
                     <thead className="bg-slate-50/80 border-b border-slate-200 text-slate-500 uppercase text-xs font-bold tracking-wider sticky top-0 backdrop-blur-sm z-10">
                         {table.getHeaderGroups().map(headerGroup => (
                             <tr key={headerGroup.id}>
