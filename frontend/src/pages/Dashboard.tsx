@@ -192,7 +192,7 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                     processedLogs.forEach((log: any) => {
                         Object.keys(log).forEach(k => {
                             if (!['slno', 'mapped_slno', 'deviceid', 'created_at', 'payload_type', 'json_payload', 'customername'].includes(k)) {
-                                if (!k.toLowerCase().startsWith('hygiene')) {
+                                if (!k.toLowerCase().startsWith('hygiene') && !['tvoc_odour_value', 'tvoc_hygiene_score'].includes(k)) {
                                     dynamicKeys.add(k);
                                 }
                             }

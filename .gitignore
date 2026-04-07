@@ -10,3 +10,5 @@ backend/errLogs.txt
 backend/EventLogs/
 backend/temp/
 frontend/dist/
+backend/JSONLogs/
+backend/ErrorLogs/

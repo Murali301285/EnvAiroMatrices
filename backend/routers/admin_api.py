@@ -67,28 +67,72 @@ def execute_query(query: str, params: tuple = (), fetchResult: bool = True):
 
 # ----- ALERTS -----
 @router.get("/alerts")
-def get_alerts(from_date: str = None, to_date: str = None):
-    query = """
-        SELECT slno, Deviceid, param_tag, 
-               TO_CHAR(Createdon, 'YYYY-MM-DD HH24:MI:SS') as "Createdon", 
-               AlertSequence, 
-               TO_CHAR(LastRunOn, 'YYYY-MM-DD HH24:MI:SS') as "LastRunOn", 
-               consucutive_minutes, isResolved, 
-               TO_CHAR(ResolvedOn, 'YYYY-MM-DD HH24:MI:SS') as "ResolvedOn", 
-               Time_taken 
-        FROM tblAlertScheduler
-        WHERE 1=1
-    """
-    params = []
-    if from_date:
-        query += " AND DATE(Createdon) >= %s"
-        params.append(from_date)
-    if to_date:
-        query += " AND DATE(Createdon) <= %s"
-        params.append(to_date)
-        
-    query += " ORDER BY slno DESC LIMIT 100"
-    return execute_query(query, tuple(params))
+def get_alerts(from_date: str = None, to_date: str = None, alert_type: str = "TVOC"):
+    if alert_type == "TVOC":
+        query = """
+            SELECT slno, DeviceId as deviceid, 'TVOC' as param_tag, 
+                   TO_CHAR(CDatetime, 'YYYY-MM-DD HH24:MI:SS') as createdon, 
+                   count as alertsequence, 
+                   TO_CHAR(lastupdatedon, 'YYYY-MM-DD HH24:MI:SS') as lastrunon, 
+                   continousbad as consucutive_minutes, isResolved as isresolved, 
+                   TO_CHAR(statuschangedon, 'YYYY-MM-DD HH24:MI:SS') as resolvedon, 
+                   currentstatus, tvoc_value 
+            FROM tblAlertBucketTVOC
+            WHERE 1=1
+        """
+        params = []
+        if from_date:
+            query += " AND DATE(CDatetime) >= %s"
+            params.append(from_date)
+        if to_date:
+            query += " AND DATE(CDatetime) <= %s"
+            params.append(to_date)
+            
+        query += " ORDER BY slno DESC LIMIT 100"
+        return execute_query(query, tuple(params))
+    elif alert_type == "PCH":
+        query = """
+            SELECT slno, deviceid, 'PCH' as param_tag, 
+                   TO_CHAR(cdatetime, 'YYYY-MM-DD HH24:MI:SS') as createdon, 
+                   count as alertsequence, 
+                   TO_CHAR(lastupdatedon, 'YYYY-MM-DD HH24:MI:SS') as lastrunon, 
+                   continousbad as consucutive_minutes, isresolved, 
+                   TO_CHAR(statuschangedon, 'YYYY-MM-DD HH24:MI:SS') as resolvedon, 
+                   currentstatus, people_count_delta as tvoc_value 
+            FROM tblalertbucketpch
+            WHERE 1=1
+        """
+        params = []
+        if from_date:
+            query += " AND DATE(cdatetime) >= %s"
+            params.append(from_date)
+        if to_date:
+            query += " AND DATE(cdatetime) <= %s"
+            params.append(to_date)
+            
+        query += " ORDER BY slno DESC LIMIT 100"
+        return execute_query(query, tuple(params))
+    else:
+        query = """
+            SELECT slno, Deviceid as deviceid, param_tag, 
+                   TO_CHAR(Createdon, 'YYYY-MM-DD HH24:MI:SS') as createdon, 
+                   AlertSequence as alertsequence, 
+                   TO_CHAR(LastRunOn, 'YYYY-MM-DD HH24:MI:SS') as lastrunon, 
+                   consucutive_minutes, isResolved as isresolved, 
+                   TO_CHAR(ResolvedOn, 'YYYY-MM-DD HH24:MI:SS') as resolvedon 
+            FROM tblAlertScheduler
+            WHERE param_tag = %s
+        """
+        params = [alert_type]
+        if from_date:
+            query += " AND DATE(Createdon) >= %s"
+            params.append(from_date)
+        if to_date:
+            query += " AND DATE(Createdon) <= %s"
+            params.append(to_date)
+            
+        query += " ORDER BY slno DESC LIMIT 100"
+        return execute_query(query, tuple(params))
 
 # ----- CUSTOMERS -----
 @router.get("/customers")

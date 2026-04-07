@@ -47,7 +47,8 @@ AS $function$
                         d.alias,
                         d.location,
                         (d.working_hours_json->>'start')::TIME AS start_time,
-                        (d.working_hours_json->>'end')::TIME AS end_time
+                        (d.working_hours_json->>'end')::TIME AS end_time,
+                        COALESCE(c.peoplelimit, 99999) AS plimit
                     FROM tblDeviceMaster d
                     LEFT JOIN tblCustomerMaster c ON d.customer_code = c.customer_code
                     WHERE d.deviceid = p_deviceid
@@ -74,9 +75,9 @@ AS $function$
                 ),
                 hourly_aggregations AS (
                     SELECT 
-                        ROUND(COALESCE(AVG((metrics->>v_tvoc_param_tag)::NUMERIC), 0), 2) AS tvoc_avg,
-                        ROUND(COALESCE(MAX((metrics->>v_tvoc_param_tag)::NUMERIC), 0), 2) AS tvoc_max,
-                        ROUND(COALESCE(MIN((metrics->>v_tvoc_param_tag)::NUMERIC), 0), 2) AS tvoc_min,
+                        ROUND(COALESCE(AVG(COALESCE((metrics->>'VOC')::NUMERIC, 0) + COALESCE((metrics->>'SH2S')::NUMERIC, 0)), 0), 2) AS tvoc_avg,
+                        ROUND(COALESCE(MAX(COALESCE((metrics->>'VOC')::NUMERIC, 0) + COALESCE((metrics->>'SH2S')::NUMERIC, 0)), 0), 2) AS tvoc_max,
+                        ROUND(COALESCE(MIN(COALESCE((metrics->>'VOC')::NUMERIC, 0) + COALESCE((metrics->>'SH2S')::NUMERIC, 0)), 0), 2) AS tvoc_min,
                         COALESCE(MAX((metrics->>'IN')::NUMERIC), 0) AS in_max,
                         COALESCE(MIN((metrics->>'IN')::NUMERIC), 0) AS in_min,
                         COALESCE(MAX((metrics->>'OUT')::NUMERIC), 0) AS out_max,
@@ -116,7 +117,11 @@ AS $function$
                 tvoc_evaluations AS (
                     SELECT 
                         m.created_at,
-                        UPPER(COALESCE(m.metrics->>'STATUS', 'UNKNOWN')) AS status
+                        CASE 
+                            WHEN (COALESCE((m.metrics->>'VOC')::NUMERIC, 0) + COALESCE((m.metrics->>'SH2S')::NUMERIC, 0)) <= 5.00 THEN 'GOOD'
+                            WHEN (COALESCE((m.metrics->>'VOC')::NUMERIC, 0) + COALESCE((m.metrics->>'SH2S')::NUMERIC, 0)) <= 12.00 THEN 'MODERATE'
+                            ELSE 'BAD'
+                        END AS status
                     FROM tblminutedetails m
                     CROSS JOIN tvoc_metadata tm
                     WHERE m.deviceid = p_deviceid 
@@ -132,6 +137,61 @@ AS $function$
                                         (SELECT MIN(created_at) 
                                          FROM tvoc_evaluations 
                                          WHERE created_at > COALESCE((SELECT created_at FROM tvoc_evaluations WHERE status != 'BAD' ORDER BY created_at DESC LIMIT 1), '1970-01-01'::TIMESTAMP)
+                                        ), 
+                                        v_latest_timestamp
+                                    )
+                                )) / 60
+                            ELSE 0
+                        END AS consecutive_bad_mins
+                ),
+                pch_evaluations AS (
+                    SELECT 
+                        m.created_at,
+                        CASE 
+                           WHEN (MAX(COALESCE((m.metrics->>'OUT')::NUMERIC, 0)) OVER w - MIN(COALESCE((m.metrics->>'OUT')::NUMERIC, 0)) OVER w) > (SELECT plimit FROM device_info) THEN 'BAD' 
+                           ELSE 'GOOD' 
+                        END AS status
+                    FROM tblminutedetails m
+                    WHERE m.deviceid = p_deviceid 
+                      AND m.created_at <= v_latest_timestamp
+                      AND m.created_at >= date_trunc('day', v_latest_timestamp)
+                    WINDOW w AS (
+                        PARTITION BY date_trunc('hour', m.created_at) + (DIV(EXTRACT(MINUTE FROM m.created_at)::INT, 15) * 15) * INTERVAL '1 minute'
+                        ORDER BY m.created_at ASC
+                    )
+                ),
+                continuous_pch_bad AS (
+                    SELECT 
+                        CASE 
+                            WHEN (SELECT status FROM pch_evaluations WHERE created_at >= date_trunc('hour', v_latest_timestamp) ORDER BY created_at DESC LIMIT 1) = 'BAD' THEN 
+                                EXTRACT(EPOCH FROM (
+                                    v_latest_timestamp - COALESCE(
+                                        (SELECT MIN(created_at) 
+                                         FROM pch_evaluations 
+                                         WHERE created_at >= date_trunc('hour', v_latest_timestamp)
+                                           AND created_at > COALESCE(
+                                               (SELECT created_at FROM pch_evaluations WHERE created_at >= date_trunc('hour', v_latest_timestamp) AND status != 'BAD' ORDER BY created_at DESC LIMIT 1), 
+                                               date_trunc('hour', v_latest_timestamp) - INTERVAL '1 minute'
+                                           )
+                                        ), 
+                                        v_latest_timestamp
+                                    )
+                                )) / 60
+                            ELSE 0
+                        END AS consecutive_bad_mins
+                ),
+                continuous_pcd_bad AS (
+                    SELECT 
+                        CASE 
+                            WHEN (SELECT status FROM pch_evaluations ORDER BY created_at DESC LIMIT 1) = 'BAD' THEN 
+                                EXTRACT(EPOCH FROM (
+                                    v_latest_timestamp - COALESCE(
+                                        (SELECT MIN(created_at) 
+                                         FROM pch_evaluations 
+                                         WHERE created_at > COALESCE(
+                                             (SELECT created_at FROM pch_evaluations WHERE status != 'BAD' ORDER BY created_at DESC LIMIT 1), 
+                                             date_trunc('day', v_latest_timestamp) - INTERVAL '1 minute'
+                                         )
                                         ), 
                                         v_latest_timestamp
                                     )
@@ -160,31 +220,33 @@ AS $function$
                     0::INTEGER AS alert_sequence,
                     
                     json_build_object(
-                         'value', ROUND(COALESCE(lm.voc_val, 0)::NUMERIC, 2),
-                         'odour_value', ROUND(COALESCE(lm.sh2s_val, 0)::NUMERIC, 2),
+                         'value', ROUND(LEAST(15.00, COALESCE(lm.voc_val, 0)::NUMERIC + COALESCE(lm.sh2s_val, 0)::NUMERIC), 2),
                          'unit', 'ppm',
-                         'condition', COALESCE(lm.status_val, 'UNKNOWN'),
-                         'hygiene_score', ROUND(COALESCE(lm.hygiene_val, 0)::NUMERIC, 2)
+                         'condition', CASE 
+                                        WHEN (COALESCE(lm.voc_val, 0)::NUMERIC + COALESCE(lm.sh2s_val, 0)::NUMERIC) <= 5.00 THEN 'GOOD'
+                                        WHEN (COALESCE(lm.voc_val, 0)::NUMERIC + COALESCE(lm.sh2s_val, 0)::NUMERIC) <= 12.00 THEN 'MODERATE'
+                                        ELSE 'BAD'
+                                      END
                     )::JSON AS tvoc,
                     
                     ha.tvoc_avg::NUMERIC,
                     ha.tvoc_max::NUMERIC,
                     ha.tvoc_min::NUMERIC,
-                    ctb.consecutive_bad_mins::NUMERIC AS tvoc_bad,
+                    ROUND(ctb.consecutive_bad_mins::NUMERIC, 0) AS tvoc_bad,
                     
                     да.pcd::NUMERIC,
                     да.pcd_max::NUMERIC,
-                    0::NUMERIC AS pcd_bad,
+                    ROUND(cpcd.consecutive_bad_mins::NUMERIC, 0) AS pcd_bad,
                     
                     json_build_object(
                          'value', GREATEST(0, ha.out_max - ha.out_min),
                          'unit', '',
                          'pch_in', GREATEST(0, ha.in_max - ha.in_min),
-                         'condition', 'GOOD'
+                         'condition', COALESCE((SELECT status FROM pch_evaluations ORDER BY created_at DESC LIMIT 1), 'GOOD')
                     )::JSON AS pch,
                     GREATEST(0, ha.out_avg - ha.out_start)::NUMERIC AS pch_Avg,
                     GREATEST(0, ha.out_max - ha.out_start)::NUMERIC AS pch_max,
-                    0::NUMERIC AS pch_bad,
+                    ROUND(cpch.consecutive_bad_mins::NUMERIC, 0) AS pch_bad,
                     
                     to_char(v_latest_timestamp, 'HH24')::VARCHAR AS "time",
                     COALESCE(lm.hum_val, 0)::NUMERIC AS hum,
@@ -196,6 +258,8 @@ AS $function$
                 CROSS JOIN latest_metrics lm
                 CROSS JOIN hourly_aggregations ha
                 CROSS JOIN daily_aggregations да
-                CROSS JOIN continuous_tvoc_bad ctb;
+                CROSS JOIN continuous_tvoc_bad ctb
+                CROSS JOIN continuous_pch_bad cpch
+                CROSS JOIN continuous_pcd_bad cpcd;
             END;
             $function$

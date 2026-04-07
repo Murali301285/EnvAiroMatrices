@@ -97,6 +97,9 @@ def orchestrate_json_payloads():
             orchestrated_devices = set()
             processed_slnos = []
             
+
+            
+            
             for row in unprocessed:
                 slno = row['slno']
                 dev_id = row['deviceid']
@@ -503,7 +506,7 @@ def evaluate_active_alerts():
                 
                 # Detect Active Broken Parameters
                 active_bads = []
-                if str(current_state.get('tvoc_con', '')).upper() in ['BAD']: active_bads.append('TVOC')
+                if current_state.get('tvoc_bad') is not None and float(current_state.get('tvoc_bad')) > 0: active_bads.append('TVOC')
                 if current_state.get('pcd_bad') is not None and float(current_state.get('pcd_bad')) > 0: active_bads.append('PCD')
                 if current_state.get('pch_bad') is not None and float(current_state.get('pch_bad')) > 0: active_bads.append('PCH')
                 
@@ -573,11 +576,268 @@ def evaluate_active_alerts():
     finally:
         if conn: conn.close()
 
+def evaluate_tvoc_bucket_stream():
+    """
+    Independent 1-minute sweep picking up fresh IoT bursts natively for Alert Bucket states.
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT slno, deviceid, revText, receivedOn FROM tblDatareceiver WHERE isAlertProcessed=0 LIMIT 2000")
+            unprocessed = cursor.fetchall()
+            
+            if not unprocessed:
+                return
+                
+            processed_slnos = []
+            
+            for row in unprocessed:
+                _slno = row['slno']
+                processed_slnos.append(_slno)
+                _dev_id = row['deviceid']
+                _rev_text = row.get('revtext') or row.get('revText', '')
+                _received_on = row['receivedon'] if 'receivedon' in row else row.get('receivedOn')
+                
+                try:
+                    voc_match = re.search(r'VOC:([-0-9.]+)', _rev_text)
+                    sh2s_match = re.search(r'SH2S:([-0-9.]+)', _rev_text)
+                    
+                    if voc_match and sh2s_match:
+                        sum_val = float(voc_match.group(1)) + float(sh2s_match.group(1))
+                        now = datetime.datetime.now()
+                        
+                        cursor.execute("SELECT * FROM tblAlertBucketTVOC WHERE DeviceId=%s AND isResolved=0 ORDER BY slno DESC LIMIT 1", (_dev_id,))
+                        open_bucket = cursor.fetchone()
+                        
+                        if sum_val > 12.00:
+                            if not open_bucket:
+                                cursor.execute("""
+                                    INSERT INTO tblAlertBucketTVOC (DeviceId, CDatetime, tvoc_value, count, isResolved, continousbad, lastupdatedon, currentstatus)
+                                    VALUES (%s, %s, %s, 1, 0, 0, %s, 'Bad')
+                                """, (_dev_id, _received_on, sum_val, now))
+                            else:
+                                b_slno = open_bucket['slno']
+                                c_datetime = open_bucket.get('cdatetime')
+                                diff_mins = int((now - c_datetime).total_seconds() / 60.0) if c_datetime else 0
+                                cursor.execute("""
+                                    UPDATE tblAlertBucketTVOC 
+                                    SET tvoc_value=%s, continousbad=%s, lastupdatedon=%s 
+                                    WHERE slno=%s
+                                """, (sum_val, diff_mins, now, b_slno))
+                        else:
+                            if open_bucket:
+                                b_slno = open_bucket['slno']
+                                c_datetime = open_bucket.get('cdatetime')
+                                diff_mins = int((now - c_datetime).total_seconds() / 60.0) if c_datetime else 0
+                                cursor.execute("""
+                                    UPDATE tblAlertBucketTVOC 
+                                    SET isResolved=1, currentstatus='Good', statuschangedon=%s, lastupdatedon=%s, continousbad=%s
+                                    WHERE slno=%s
+                                """, (now, now, diff_mins, b_slno))
+                except Exception as ex:
+                    print("Bucket Parser Error:", ex)
+
+            # Mark processed for TVOC alert exclusively
+            if processed_slnos:
+                placeholders = ','.join(['%s'] * len(processed_slnos))
+                cursor.execute(f"UPDATE tblDatareceiver SET isAlertProcessed=1 WHERE slno IN ({placeholders})", tuple(processed_slnos))
+            conn.commit()
+    except Exception as e:
+        print("TVOC Bucket Stream Error:", e)
+    finally:
+        if conn: conn.close()
+
+def dispatch_tvoc_alerts_job():
+    print("Running TVOC Alert Dispatcher...")
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            # 1. Fetch Formatter for Alert
+            cursor.execute("SELECT f.jsonTemplate, f.storedProcedureName FROM tblJsonFormatter f WHERE f.name='woloo_scheduled_json' AND f.isDeleted=0 LIMIT 1")
+            formatter = cursor.fetchone()
+            
+            if not formatter or not formatter.get('jsontemplate'):
+                return
+                
+            template = formatter.get('jsontemplate') or formatter.get('jsonTemplate')
+            sp_name = formatter.get('storedprocedurename') or formatter.get('storedProcedureName')
+            
+            # 2. Iterate Active Alerts (isResolved=0) -> Spam indefinitely every 3 mins
+            cursor.execute("SELECT * FROM tblAlertBucketTVOC WHERE isResolved=0")
+            active_alerts = cursor.fetchall()
+            for b in active_alerts:
+                dev_id = b.get('deviceid')
+                b_slno = b.get('slno')
+                cursor.execute("""
+                    SELECT s.post_url_live FROM tblDeviceMaster dm 
+                    JOIN tblScheduler s ON dm.customer_code = s.customer_code WHERE dm.deviceid=%s LIMIT 1
+                """, (dev_id,))
+                s_row = cursor.fetchone()
+                target_url = s_row['post_url_live'] if s_row else ''
+                b_count_before = b.get('count', 0)
+                diff_mins = b.get('continousbad', 0)
+                overrides = {'triggered_by': 'threshold_breach', 'alert_sequence': b_count_before + 1, 'tvoc_bad': diff_mins}
+                payload = _parse_template(template, sp_name, dev_id, overrides)
+                if target_url:
+                    cursor.execute("INSERT INTO tblDeadLetterQueue (deviceid, payload, targetUrl) VALUES (%s, %s, %s)", (dev_id, payload, target_url))
+                try:
+                    import os, datetime
+                    from logger import JSON_LOG_DIR
+                    safe_dt = datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")
+                    f_path = os.path.join(JSON_LOG_DIR, f"{dev_id}_{safe_dt}_Alert_Tvoc.json")
+                    with open(f_path, 'w', encoding='utf-8') as fh: fh.write(payload)
+                except Exception as e: print("File Save Error:", e)
+                
+                # Sequence successfully dispatched, increment the level count specifically on 3-min intervals
+                cursor.execute("UPDATE tblAlertBucketTVOC SET count = count + 1 WHERE slno=%s", (b_slno,))
+            
+            # 3. Iterate Resolved Alerts (never sent)
+            cursor.execute("SELECT * FROM tblAlertBucketTVOC WHERE isResolved=1 AND ResolvedalertSentOn IS NULL")
+            resolved_alerts = cursor.fetchall()
+            now = datetime.datetime.now()
+            for b in resolved_alerts:
+                dev_id = b.get('deviceid')
+                b_slno = b.get('slno')
+                cursor.execute("""
+                    SELECT s.post_url_live FROM tblDeviceMaster dm 
+                    JOIN tblScheduler s ON dm.customer_code = s.customer_code WHERE dm.deviceid=%s LIMIT 1
+                """, (dev_id,))
+                s_row = cursor.fetchone()
+                target_url = s_row['post_url_live'] if s_row else ''
+                diff_mins = b.get('continousbad', 0)
+                overrides = {'triggered_by': 'threshold_resolved', 'alert_sequence': b.get('count', 0), 'tvoc_bad': diff_mins}
+                payload = _parse_template(template, sp_name, dev_id, overrides)
+                if target_url:
+                    cursor.execute("INSERT INTO tblDeadLetterQueue (deviceid, payload, targetUrl) VALUES (%s, %s, %s)", (dev_id, payload, target_url))
+                try:
+                    import os, datetime
+                    from logger import JSON_LOG_DIR
+                    safe_dt = datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")
+                    f_path = os.path.join(JSON_LOG_DIR, f"{dev_id}_{safe_dt}_Alert_Tvoc.json")
+                    with open(f_path, 'w', encoding='utf-8') as fh: fh.write(payload)
+                except Exception as e: print("File Save Error:", e)
+                cursor.execute("UPDATE tblAlertBucketTVOC SET ResolvedalertSentOn=%s WHERE slno=%s", (now, b_slno))
+            
+            conn.commit()
+    except Exception as e:
+        print("Dispatch TVOC Error:", e)
+    finally:
+        if conn: conn.close()
+
+def dispatch_pch_alerts_job():
+    print("Running PCH Alert Dispatcher (15 Min Maintenance)...")
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT peoplelimit FROM tblcustomermaster WHERE customername ILIKE '%woloo%' LIMIT 1")
+            th_row = cursor.fetchone()
+            threshold = float(th_row['peoplelimit']) if th_row and th_row['peoplelimit'] is not None else 10.0
+            
+            cursor.execute("SELECT jsontemplate, storedprocedurename FROM tbljsonformatter WHERE name='woloo_scheduled_json' AND isdeleted=0 LIMIT 1")
+            formatter = cursor.fetchone()
+            if not formatter: return
+            
+            cursor.execute("SELECT * FROM tblalertbucketpch WHERE isresolved=0")
+            active_alerts = cursor.fetchall()
+            now = datetime.datetime.now()
+            
+            import re
+            for b in active_alerts:
+                dev_id = b.get('deviceid')
+                b_slno = b.get('slno')
+                c_datetime = b.get('cdatetime')
+                
+                block_start_minute = (now.minute // 15) * 15
+                block_start = now.replace(minute=block_start_minute, second=0, microsecond=0)
+                
+                cursor.execute("""
+                    SELECT revText FROM tblDatareceiverHistory 
+                    WHERE deviceid=%s AND receivedOn >= %s AND receivedOn <= %s
+                """, (dev_id, block_start, now))
+                block_rows = cursor.fetchall()
+                outs = []
+                for br in block_rows:
+                    m = re.search(r'OUT:([-0-9.]+)', br['revtext'])
+                    if m: outs.append(float(m.group(1)))
+                
+                if outs:
+                    delta = max(outs) - min(outs)
+                    diff_mins = int((now - c_datetime).total_seconds() / 60.0) if c_datetime else 0
+                    
+                    
+                    cursor.execute("SELECT s.post_url_live FROM tblDeviceMaster dm JOIN tblScheduler s ON dm.customer_code = s.customer_code WHERE dm.deviceid=%s LIMIT 1", (dev_id,))
+                    s_row = cursor.fetchone()
+                    target_url = s_row['post_url_live'] if s_row else ''
+                    
+                    template = formatter.get('jsontemplate') or formatter.get('jsonTemplate')
+                    sp_name = formatter.get('storedprocedurename') or formatter.get('storedProcedureName')
+                    
+                    if delta > threshold:
+                        cursor.execute("UPDATE tblalertbucketpch SET count = count + 1, continousbad=%s, lastupdatedon=%s WHERE slno=%s", (diff_mins, now, b_slno))
+                        overrides = {'triggered_by': 'PCH Level Threshold Breach', 'alert_sequence': b['count']+1, 'pcd_bad': diff_mins, 'pch_bad': diff_mins}
+                        payload = _parse_template(template, sp_name, dev_id, overrides)
+                        if target_url:
+                            cursor.execute("INSERT INTO tblDeadLetterQueue (deviceid, payload, targetUrl) VALUES (%s, %s, %s)", (dev_id, payload, target_url))
+                        try:
+                            import os, datetime
+                            from logger import JSON_LOG_DIR
+                            safe_dt = datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")
+                            f_path = os.path.join(JSON_LOG_DIR, f"{dev_id}_{safe_dt}_Alert_Pch.json")
+                            with open(f_path, 'w', encoding='utf-8') as fh: fh.write(payload)
+                        except Exception as e: print("File Save Error:", e)
+                    else:
+                        cursor.execute("UPDATE tblalertbucketpch SET isresolved=1, currentstatus='Good', statuschangedon=%s, continousbad=%s WHERE slno=%s", (now, diff_mins, b_slno))
+                        cursor.execute("UPDATE tblalertbucketpch SET resolvedalertsenton=%s WHERE slno=%s", (now, b_slno))
+                        overrides = {'triggered_by': 'PCH Level Threshold Resolved', 'alert_sequence': b['count'], 'pcd_bad': diff_mins, 'pch_bad': diff_mins}
+                        payload = _parse_template(template, sp_name, dev_id, overrides)
+                        if target_url:
+                            cursor.execute("INSERT INTO tblDeadLetterQueue (deviceid, payload, targetUrl) VALUES (%s, %s, %s)", (dev_id, payload, target_url))
+                        try:
+                            import os, datetime
+                            from logger import JSON_LOG_DIR
+                            safe_dt = datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")
+                            f_path = os.path.join(JSON_LOG_DIR, f"{dev_id}_{safe_dt}_Alert_Pch.json")
+                            with open(f_path, 'w', encoding='utf-8') as fh: fh.write(payload)
+                        except Exception as e: print("File Save Error:", e)
+                else:
+                    diff_mins = int((now - c_datetime).total_seconds() / 60.0) if c_datetime else 0
+                    cursor.execute("UPDATE tblalertbucketpch SET isresolved=1, currentstatus='Good', statuschangedon=%s, continousbad=%s WHERE slno=%s", (now, diff_mins, b_slno))
+                    cursor.execute("UPDATE tblalertbucketpch SET resolvedalertsenton=%s WHERE slno=%s", (now, b_slno))
+                    
+                    cursor.execute("SELECT s.post_url_live FROM tblDeviceMaster dm JOIN tblScheduler s ON dm.customer_code = s.customer_code WHERE dm.deviceid=%s LIMIT 1", (dev_id,))
+                    s_row = cursor.fetchone()
+                    target_url = s_row['post_url_live'] if s_row else ''
+                    
+                    template = formatter.get('jsontemplate') or formatter.get('jsonTemplate')
+                    sp_name = formatter.get('storedprocedurename') or formatter.get('storedProcedureName')
+                    
+                    overrides = {'triggered_by': 'PCH Level Threshold Resolved', 'alert_sequence': b['count'], 'pcd_bad': diff_mins, 'pch_bad': diff_mins}
+                    payload = _parse_template(template, sp_name, dev_id, overrides)
+                    if target_url:
+                        cursor.execute("INSERT INTO tblDeadLetterQueue (deviceid, payload, targetUrl) VALUES (%s, %s, %s)", (dev_id, payload, target_url))
+                    try:
+                        import os, datetime
+                        from logger import JSON_LOG_DIR
+                        safe_dt = datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")
+                        f_path = os.path.join(JSON_LOG_DIR, f"{dev_id}_{safe_dt}_Alert_Pch.json")
+                        with open(f_path, 'w', encoding='utf-8') as fh: fh.write(payload)
+                    except Exception as e: print("File Save Error:", e)
+                    
+            conn.commit()
+    except Exception as e:
+        print("Dispatch PCH Error:", e)
+    finally:
+        if conn: conn.close()
+
 def start_schedulers():
     scheduler = BackgroundScheduler()
     scheduler.add_job(orchestrate_json_payloads, 'cron', minute='14,29,44,59')
     scheduler.add_job(evaluate_active_alerts, 'cron', minute='14,29,44,59')
+    scheduler.add_job(dispatch_pch_alerts_job, 'cron', minute='14,29,44,59')
     scheduler.add_job(process_dlq, 'interval', minutes=2)
+    
+    scheduler.add_job(dispatch_tvoc_alerts_job, 'interval', minutes=3)
+    scheduler.add_job(evaluate_tvoc_bucket_stream, 'interval', minutes=1)
     
     scheduler.add_job(db_cleanup_job, 'cron', hour=0, minute=0)
     scheduler.add_job(disk_cleanup_job, 'cron', hour=0, minute=5) # Runs slightly after DB cleanup
