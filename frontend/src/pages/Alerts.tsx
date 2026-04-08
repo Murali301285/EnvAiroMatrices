@@ -113,6 +113,23 @@ export default function Alerts() {
                 accessorKey: 'resolvedon',
                 header: 'Resolved On',
                 cell: info => <span className="text-emerald-600 font-mono text-xs italic">{info.getValue() || '—'}</span>
+            },
+            {
+                accessorKey: 'remarks',
+                header: 'Remarks',
+                cell: info => {
+                    const row = info.row.original as any;
+                    const seq = row.alertsequence || 0;
+                    const isRes = row.isresolved === 1 || row.isresolved === true;
+                    
+                    if (isRes) {
+                        return <span className="text-emerald-600 font-medium text-xs bg-emerald-50 px-2 py-1 rounded">Resolved JSON Sent: {row.resolvedon || row.lastrunon || '—'}</span>;
+                    }
+                    if (seq === 0) {
+                        return <span className="text-slate-400 font-medium text-xs italic bg-slate-50 px-2 py-1 rounded">Evaluating Block #1 (No JSON)</span>;
+                    }
+                    return <span className="text-sky-600 font-medium text-xs bg-sky-50 px-2 py-1 rounded border border-sky-100">Alert JSON #{seq} Sent: {row.lastrunon || '—'}</span>;
+                }
             }
         );
 

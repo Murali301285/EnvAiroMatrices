@@ -97,6 +97,25 @@ AS $function$
                       AND created_at >= v_window_start 
                       AND created_at <= v_current_time
                 ),
+                pch_cycles AS (
+                    SELECT 
+                        date_trunc('hour', m.created_at) + (DIV(EXTRACT(MINUTE FROM m.created_at)::INT, 15) * 15) * INTERVAL '1 minute' AS bucket_start,
+                        COALESCE(MAX((m.metrics->>'OUT')::NUMERIC), 0) - COALESCE(MIN((m.metrics->>'OUT')::NUMERIC), 0) AS out_delta,
+                        COALESCE(MAX((m.metrics->>'IN')::NUMERIC), 0) - COALESCE(MIN((m.metrics->>'IN')::NUMERIC), 0) AS in_delta
+                    FROM tblminutedetails m
+                    WHERE m.deviceid = p_deviceid 
+                      AND m.created_at >= v_window_start 
+                      AND m.created_at <= v_current_time
+                    GROUP BY bucket_start
+                ),
+                pch_cycle_aggregations AS (
+                    SELECT 
+                        ROUND(COALESCE(AVG(out_delta), 0), 0) AS pch_avg,
+                        COALESCE(MAX(out_delta), 0) AS pch_max,
+                        COALESCE((SELECT out_delta FROM pch_cycles ORDER BY bucket_start DESC LIMIT 1), 0) AS latest_out_delta,
+                        COALESCE((SELECT in_delta FROM pch_cycles ORDER BY bucket_start DESC LIMIT 1), 0) AS latest_in_delta
+                    FROM pch_cycles
+                ),
                 daily_pcd AS (
                     SELECT 
                         COALESCE((SELECT (metrics->>'OUT_RAW')::NUMERIC 
@@ -239,13 +258,13 @@ AS $function$
                     ROUND(cpcd.consecutive_bad_mins::NUMERIC, 0) AS pcd_bad,
                     
                     json_build_object(
-                         'value', GREATEST(0, ha.out_max - ha.out_min),
+                         'value', pca.latest_out_delta,
                          'unit', '',
-                         'pch_in', GREATEST(0, ha.in_max - ha.in_min),
+                         'pch_in', pca.latest_in_delta,
                          'condition', COALESCE((SELECT status FROM pch_evaluations ORDER BY created_at DESC LIMIT 1), 'GOOD')
                     )::JSON AS pch,
-                    GREATEST(0, ha.out_avg - ha.out_start)::NUMERIC AS pch_Avg,
-                    GREATEST(0, ha.out_max - ha.out_start)::NUMERIC AS pch_max,
+                    pca.pch_avg::NUMERIC AS pch_Avg,
+                    pca.pch_max::NUMERIC AS pch_max,
                     ROUND(cpch.consecutive_bad_mins::NUMERIC, 0) AS pch_bad,
                     
                     to_char(v_latest_timestamp, 'HH24')::VARCHAR AS "time",
@@ -258,6 +277,7 @@ AS $function$
                 CROSS JOIN latest_metrics lm
                 CROSS JOIN hourly_aggregations ha
                 CROSS JOIN daily_aggregations да
+                CROSS JOIN pch_cycle_aggregations pca
                 CROSS JOIN continuous_tvoc_bad ctb
                 CROSS JOIN continuous_pch_bad cpch
                 CROSS JOIN continuous_pcd_bad cpcd;

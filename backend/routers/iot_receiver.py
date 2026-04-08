@@ -79,7 +79,7 @@ async def receive_iot_data(request: Request):
                             cursor.execute("""
                                 INSERT INTO tblalertbucketpch (deviceid, CDatetime, people_count_delta, count, currentstatus, continousbad) 
                                 VALUES (%s, %s, %s, 1, 'Bad', 0) RETURNING slno
-                            """, (device_id, block_start, delta))
+                            """, (device_id, now, delta))
                             pch_slno = cursor.fetchone()['slno']
                             
                             # Format JSON payload via Parse Template
@@ -98,12 +98,10 @@ async def receive_iot_data(request: Request):
                                 payload = _parse_template(template, sp_name, device_id, overrides)
                                 if target_url:
                                     cursor.execute("INSERT INTO tblDeadLetterQueue (deviceid, payload, targetUrl) VALUES (%s, %s, %s)", (device_id, payload, target_url))
+                                cursor.execute("INSERT INTO tblScheduledJsonHistory (deviceid, json_payload, payload_type) VALUES (%s, %s::jsonb, %s)", (device_id, payload, 'Alert'))
                                 try:
-                                    import os, datetime
-                                    safe_dt = datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")
-                                    # Fix relative paths since iot_receiver is in routers/
-                                    import sys
                                     from logger import JSON_LOG_DIR
+                                    safe_dt = datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")
                                     target_dir = os.path.join(JSON_LOG_DIR, "Woloo", "Alert")
                                     os.makedirs(target_dir, exist_ok=True)
                                     f_path = os.path.join(target_dir, f"{device_id.replace(':', '').replace('+', '')}_{safe_dt}_Alert_Pch.json")

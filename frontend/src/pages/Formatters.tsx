@@ -488,12 +488,17 @@ export default function Formatters() {
                         <input type="date" value={histFrom} onChange={e => setHistFrom(e.target.value)} className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm outline-none text-slate-600" />
                         <span className="text-slate-400 text-sm">to</span>
                         <input type="date" value={histTo} onChange={e => setHistTo(e.target.value)} className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm outline-none text-slate-600" />
-                        <select value={histPayloadType} onChange={e => setHistPayloadType(e.target.value)} className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm outline-none bg-white text-slate-700">
-                            <option value="All">All Types</option>
-                            <option value="Scheduled">Scheduled</option>
-                            <option value="Alert">Alert</option>
-                            <option value="Resolved">Resolved</option>
-                        </select>
+                        <div className="flex bg-slate-100 p-1 rounded-lg border border-slate-200">
+                            {['All', 'Scheduled', 'Alert', 'Resolved'].map(type => (
+                                <button 
+                                    key={type}
+                                    onClick={() => setHistPayloadType(type)}
+                                    className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${histPayloadType === type ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}
+                                >
+                                    {type === 'All' ? 'All Types' : type}
+                                </button>
+                            ))}
+                        </div>
                         <button onClick={fetchHistoryLogs} className="bg-indigo-600 text-white px-4 py-1.5 rounded-lg text-sm font-semibold hover:bg-indigo-500 transition-colors shadow-sm shadow-indigo-500/20">Filter</button>
                         <button onClick={fetchHistoryLogs} className="bg-sky-600 text-white px-4 py-1.5 rounded-lg text-sm font-semibold hover:bg-sky-500 transition-colors shadow-sm shadow-sky-500/20 ml-2">Refresh</button>
                         <label className="flex items-center gap-2 text-sm font-semibold text-slate-600 cursor-pointer pl-1">
