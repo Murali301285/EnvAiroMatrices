@@ -603,7 +603,8 @@ def evaluate_tvoc_bucket_stream():
                     sh2s_match = re.search(r'SH2S:([-0-9.]+)', _rev_text)
                     
                     if voc_match and sh2s_match:
-                        sum_val = float(voc_match.group(1)) + float(sh2s_match.group(1))
+                        raw_sum = float(voc_match.group(1)) + float(sh2s_match.group(1))
+                        sum_val = min(15.00, round(raw_sum, 2))
                         now = datetime.datetime.now()
                         
                         cursor.execute("SELECT * FROM tblAlertBucketTVOC WHERE DeviceId=%s AND isResolved=0 ORDER BY slno DESC LIMIT 1", (_dev_id,))
@@ -631,9 +632,9 @@ def evaluate_tvoc_bucket_stream():
                                 diff_mins = int((now - c_datetime).total_seconds() / 60.0) if c_datetime else 0
                                 cursor.execute("""
                                     UPDATE tblAlertBucketTVOC 
-                                    SET isResolved=1, currentstatus='Good', statuschangedon=%s, lastupdatedon=%s, continousbad=%s
+                                    SET isResolved=1, currentstatus='Good', statuschangedon=%s, lastupdatedon=%s, continousbad=%s, tvoc_value=%s
                                     WHERE slno=%s
-                                """, (now, now, diff_mins, b_slno))
+                                """, (now, now, diff_mins, sum_val, b_slno))
                 except Exception as ex:
                     print("Bucket Parser Error:", ex)
 
@@ -676,7 +677,7 @@ def dispatch_tvoc_alerts_job():
                 target_url = s_row['post_url_live'] if s_row else ''
                 b_count_before = b.get('count', 0)
                 diff_mins = b.get('continousbad', 0)
-                overrides = {'triggered_by': 'threshold_breach', 'alert_sequence': b_count_before + 1, 'tvoc_bad': diff_mins}
+                overrides = {'triggered_by': 'threshold_breach', 'alert_sequence': b_count_before, 'tvoc_bad': diff_mins, 'parameters': 'tvoc'}
                 payload = _parse_template(template, sp_name, dev_id, overrides)
                 if target_url:
                     cursor.execute("INSERT INTO tblDeadLetterQueue (deviceid, payload, targetUrl) VALUES (%s, %s, %s)", (dev_id, payload, target_url))
@@ -684,7 +685,9 @@ def dispatch_tvoc_alerts_job():
                     import os, datetime
                     from logger import JSON_LOG_DIR
                     safe_dt = datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")
-                    f_path = os.path.join(JSON_LOG_DIR, f"{dev_id}_{safe_dt}_Alert_Tvoc.json")
+                    target_dir = os.path.join(JSON_LOG_DIR, "Woloo", "Alert")
+                    os.makedirs(target_dir, exist_ok=True)
+                    f_path = os.path.join(target_dir, f"{dev_id.replace(':', '').replace('+', '')}_{safe_dt}_Alert_Tvoc.json")
                     with open(f_path, 'w', encoding='utf-8') as fh: fh.write(payload)
                 except Exception as e: print("File Save Error:", e)
                 
@@ -705,7 +708,7 @@ def dispatch_tvoc_alerts_job():
                 s_row = cursor.fetchone()
                 target_url = s_row['post_url_live'] if s_row else ''
                 diff_mins = b.get('continousbad', 0)
-                overrides = {'triggered_by': 'threshold_resolved', 'alert_sequence': b.get('count', 0), 'tvoc_bad': diff_mins}
+                overrides = {'triggered_by': 'threshold_resolved', 'alert_sequence': b.get('count', 1), 'tvoc_bad': diff_mins, 'parameters': 'tvoc'}
                 payload = _parse_template(template, sp_name, dev_id, overrides)
                 if target_url:
                     cursor.execute("INSERT INTO tblDeadLetterQueue (deviceid, payload, targetUrl) VALUES (%s, %s, %s)", (dev_id, payload, target_url))
@@ -713,7 +716,9 @@ def dispatch_tvoc_alerts_job():
                     import os, datetime
                     from logger import JSON_LOG_DIR
                     safe_dt = datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")
-                    f_path = os.path.join(JSON_LOG_DIR, f"{dev_id}_{safe_dt}_Alert_Tvoc.json")
+                    target_dir = os.path.join(JSON_LOG_DIR, "Woloo", "Resolved")
+                    os.makedirs(target_dir, exist_ok=True)
+                    f_path = os.path.join(target_dir, f"{dev_id.replace(':', '').replace('+', '')}_{safe_dt}_Alert_Tvoc.json")
                     with open(f_path, 'w', encoding='utf-8') as fh: fh.write(payload)
                 except Exception as e: print("File Save Error:", e)
                 cursor.execute("UPDATE tblAlertBucketTVOC SET ResolvedalertSentOn=%s WHERE slno=%s", (now, b_slno))
@@ -774,7 +779,7 @@ def dispatch_pch_alerts_job():
                     
                     if delta > threshold:
                         cursor.execute("UPDATE tblalertbucketpch SET count = count + 1, continousbad=%s, lastupdatedon=%s WHERE slno=%s", (diff_mins, now, b_slno))
-                        overrides = {'triggered_by': 'PCH Level Threshold Breach', 'alert_sequence': b['count']+1, 'pcd_bad': diff_mins, 'pch_bad': diff_mins}
+                        overrides = {'triggered_by': 'PCH Level Threshold Breach', 'alert_sequence': b['count'], 'pcd_bad': diff_mins, 'pch_bad': diff_mins, 'parameters': 'pch'}
                         payload = _parse_template(template, sp_name, dev_id, overrides)
                         if target_url:
                             cursor.execute("INSERT INTO tblDeadLetterQueue (deviceid, payload, targetUrl) VALUES (%s, %s, %s)", (dev_id, payload, target_url))
@@ -782,13 +787,15 @@ def dispatch_pch_alerts_job():
                             import os, datetime
                             from logger import JSON_LOG_DIR
                             safe_dt = datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")
-                            f_path = os.path.join(JSON_LOG_DIR, f"{dev_id}_{safe_dt}_Alert_Pch.json")
+                            target_dir = os.path.join(JSON_LOG_DIR, "Woloo", "Alert")
+                            os.makedirs(target_dir, exist_ok=True)
+                            f_path = os.path.join(target_dir, f"{dev_id.replace(':', '').replace('+', '')}_{safe_dt}_Alert_Pch.json")
                             with open(f_path, 'w', encoding='utf-8') as fh: fh.write(payload)
                         except Exception as e: print("File Save Error:", e)
                     else:
                         cursor.execute("UPDATE tblalertbucketpch SET isresolved=1, currentstatus='Good', statuschangedon=%s, continousbad=%s WHERE slno=%s", (now, diff_mins, b_slno))
                         cursor.execute("UPDATE tblalertbucketpch SET resolvedalertsenton=%s WHERE slno=%s", (now, b_slno))
-                        overrides = {'triggered_by': 'PCH Level Threshold Resolved', 'alert_sequence': b['count'], 'pcd_bad': diff_mins, 'pch_bad': diff_mins}
+                        overrides = {'triggered_by': 'PCH Level Threshold Resolved', 'alert_sequence': max(1, b['count']), 'pcd_bad': diff_mins, 'pch_bad': diff_mins, 'parameters': 'pch'}
                         payload = _parse_template(template, sp_name, dev_id, overrides)
                         if target_url:
                             cursor.execute("INSERT INTO tblDeadLetterQueue (deviceid, payload, targetUrl) VALUES (%s, %s, %s)", (dev_id, payload, target_url))
@@ -796,7 +803,9 @@ def dispatch_pch_alerts_job():
                             import os, datetime
                             from logger import JSON_LOG_DIR
                             safe_dt = datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")
-                            f_path = os.path.join(JSON_LOG_DIR, f"{dev_id}_{safe_dt}_Alert_Pch.json")
+                            target_dir = os.path.join(JSON_LOG_DIR, "Woloo", "Resolved")
+                            os.makedirs(target_dir, exist_ok=True)
+                            f_path = os.path.join(target_dir, f"{dev_id.replace(':', '').replace('+', '')}_{safe_dt}_Alert_Pch.json")
                             with open(f_path, 'w', encoding='utf-8') as fh: fh.write(payload)
                         except Exception as e: print("File Save Error:", e)
                 else:
@@ -819,7 +828,7 @@ def dispatch_pch_alerts_job():
                         import os, datetime
                         from logger import JSON_LOG_DIR
                         safe_dt = datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")
-                        f_path = os.path.join(JSON_LOG_DIR, f"{dev_id}_{safe_dt}_Alert_Pch.json")
+                        f_path = os.path.join(JSON_LOG_DIR, f"{dev_id.replace(':', '').replace('+', '')}_{safe_dt}_Alert_Pch.json")
                         with open(f_path, 'w', encoding='utf-8') as fh: fh.write(payload)
                     except Exception as e: print("File Save Error:", e)
                     

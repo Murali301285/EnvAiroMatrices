@@ -94,7 +94,7 @@ async def receive_iot_data(request: Request):
                                 target_url = s_row['post_url_live'] if s_row else ''
                                 
                                 from scheduler import _parse_template
-                                overrides = {'triggered_by': 'PCH Level', 'alert_sequence': 1, 'pcd_bad': 0, 'pch_bad': 0}
+                                overrides = {'triggered_by': 'PCH Level', 'alert_sequence': 1, 'pcd_bad': 0, 'pch_bad': 0, 'parameters': 'pch'}
                                 payload = _parse_template(template, sp_name, device_id, overrides)
                                 if target_url:
                                     cursor.execute("INSERT INTO tblDeadLetterQueue (deviceid, payload, targetUrl) VALUES (%s, %s, %s)", (device_id, payload, target_url))
@@ -104,7 +104,9 @@ async def receive_iot_data(request: Request):
                                     # Fix relative paths since iot_receiver is in routers/
                                     import sys
                                     from logger import JSON_LOG_DIR
-                                    f_path = os.path.join(JSON_LOG_DIR, f"{device_id}_{safe_dt}_Alert_Pch.json")
+                                    target_dir = os.path.join(JSON_LOG_DIR, "Woloo", "Alert")
+                                    os.makedirs(target_dir, exist_ok=True)
+                                    f_path = os.path.join(target_dir, f"{device_id.replace(':', '').replace('+', '')}_{safe_dt}_Alert_Pch.json")
                                     with open(f_path, 'w', encoding='utf-8') as fh: fh.write(payload)
                                 except Exception as e: print("File Save Error:", e)
         except Exception as pch_e:
