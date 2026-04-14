@@ -92,14 +92,14 @@ export default function ApiLogs() {
                 </div>
             </header>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 {/* Documentation Card 1 */}
                 <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm flex flex-col pt-5">
                     <div className="flex items-center justify-between mb-4">
-                        <h3 className="font-bold text-slate-800 text-lg flex items-center gap-2">
-                            <Code2 size={18} className="text-indigo-500" /> /api/v1/setworkinghours
+                        <h3 className="font-bold text-slate-800 text-[15px] xl:text-lg flex items-center gap-1 xl:gap-2">
+                            <Code2 size={18} className="text-indigo-500 shrink-0" /> /api/v1/setworkinghours
                         </h3>
-                        <span className="bg-emerald-100 text-emerald-700 font-bold px-2 py-0.5 rounded text-[10px] tracking-widest uppercase">POST</span>
+                        <span className="bg-emerald-100 text-emerald-700 font-bold px-2 py-0.5 rounded text-[10px] tracking-widest uppercase shrink-0">POST</span>
                     </div>
                     <p className="text-sm text-slate-500 mb-4 h-10">Maps live threshold business operating envelopes directly to an edge device.</p>
                     <div className="bg-slate-900 rounded-xl p-4 flex-1 flex flex-col font-mono text-xs">
@@ -120,10 +120,10 @@ export default function ApiLogs() {
                 {/* Documentation Card 2 */}
                 <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm flex flex-col pt-5">
                     <div className="flex items-center justify-between mb-4">
-                        <h3 className="font-bold text-slate-800 text-lg flex items-center gap-2">
-                            <Code2 size={18} className="text-indigo-500" /> /api/v1/setpeoplethreshold
+                        <h3 className="font-bold text-slate-800 text-[15px] xl:text-lg flex items-center gap-1 xl:gap-2">
+                            <Code2 size={18} className="text-indigo-500 shrink-0" /> /api/v1/setpeoplethreshold
                         </h3>
-                        <span className="bg-emerald-100 text-emerald-700 font-bold px-2 py-0.5 rounded text-[10px] tracking-widest uppercase">POST</span>
+                        <span className="bg-emerald-100 text-emerald-700 font-bold px-2 py-0.5 rounded text-[10px] tracking-widest uppercase shrink-0">POST</span>
                     </div>
                     <p className="text-sm text-slate-500 mb-4 h-10">Overwrites the master People count limits tied explicitly to a Customer domain.</p>
                     <div className="bg-slate-900 rounded-xl p-4 flex-1 flex flex-col font-mono text-xs">
@@ -135,6 +135,30 @@ export default function ApiLogs() {
 {`{
   "source": "woloo",
   "limit": 10
+}`}
+                        </pre>
+                    </div>
+                </div>
+
+                {/* Documentation Card 3 */}
+                <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm flex flex-col pt-5">
+                    <div className="flex items-center justify-between mb-4">
+                        <h3 className="font-bold text-slate-800 text-[15px] xl:text-lg flex items-center gap-1 xl:gap-2">
+                            <Code2 size={18} className="text-indigo-500 shrink-0" /> /api/v1/setlocation
+                        </h3>
+                        <span className="bg-emerald-100 text-emerald-700 font-bold px-2 py-0.5 rounded text-[10px] tracking-widest uppercase shrink-0">POST</span>
+                    </div>
+                    <p className="text-sm text-slate-500 mb-4 h-10">Maps live physical Location and Address bindings to a Device profile natively by MAC or Alias.</p>
+                    <div className="bg-slate-900 rounded-xl p-4 flex-1 flex flex-col font-mono text-xs">
+                        <div className="mb-2 text-indigo-300 font-semibold border-b border-slate-800 pb-2 flex items-center justify-between">
+                            <span>Headers</span>
+                            <span className="flex items-center gap-1 text-[10px] text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded"><Key size={10} /> X-Api-Key</span>
+                        </div>
+                        <pre className="text-pink-400">
+{`{
+  "deviceid": "MAC or ALIAS",
+  "location": "North Wing",
+  "address": "Floor 2"
 }`}
                         </pre>
                     </div>

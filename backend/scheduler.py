@@ -11,6 +11,11 @@ import time
 LOG_RETENTION_DAYS = 2  # Delete files older than 2 days
 DB_RETENTION_DAYS = 2   # Delete DB records older than 2 days
 
+def _get_alias(dev_id, cursor):
+    cursor.execute("SELECT alias FROM tblDeviceMaster WHERE deviceid=%s LIMIT 1", (dev_id,))
+    row = cursor.fetchone()
+    return row['alias'] if row and row.get('alias') else dev_id
+
 def _parse_template(template_str, sp_name, deviceid, overrides=None):
     try:
         # 1. Fetch live mapping data natively from Stored Procedure logic bounds
@@ -36,6 +41,22 @@ def _parse_template(template_str, sp_name, deviceid, overrides=None):
                         if isinstance(v, dict):
                             for sub_k, sub_v in v.items():
                                 db_context[sub_k] = sub_v
+            
+                cursor.execute("SELECT alias FROM tblDeviceMaster WHERE deviceid=%s", (deviceid,))
+                alias_row = cursor.fetchone()
+                if alias_row and alias_row.get('alias'):
+                    alias_str = alias_row['alias']
+                    db_context['deviceid'] = alias_str
+                    db_context['device_id'] = alias_str
+                    db_context['deviceId'] = alias_str
+                    
+                    # Force override explicitly in case schema has hardcoded MAC string
+                    if overrides is None:
+                        overrides = {}
+                    overrides['device_id'] = alias_str
+                    overrides['deviceid'] = alias_str
+                    overrides['deviceId'] = alias_str
+                    
         except Exception as e:
             print(f"STORED_PROCEDURE Execution Error ({sp_name}): {e}")
         finally:
@@ -43,12 +64,15 @@ def _parse_template(template_str, sp_name, deviceid, overrides=None):
 
         data = json.loads(template_str)
         
+        # In case overrides dictionary was created locally below traverse definition, we capture it explicitly
+        current_overrides = overrides or {}
+        
         def traverse(obj):
             if isinstance(obj, dict):
                 mapped_dict = {}
                 for k, v in obj.items():
-                    if overrides and k in overrides:
-                        mapped_dict[k] = overrides[k]
+                    if k in current_overrides:
+                        mapped_dict[k] = current_overrides[k]
                     else:
                         mapped_dict[k] = traverse(v)
                 return mapped_dict
@@ -77,6 +101,53 @@ def _parse_template(template_str, sp_name, deviceid, overrides=None):
     except Exception as e:
         print(f"Template parsing failed: {e}")
         return template_str
+
+def _dispatch_webhook(device_id, payload_str, cursor, payload_type="Scheduled"):
+    try:
+        cursor.execute("SELECT post_data, customer_code FROM tblDeviceMaster WHERE deviceid=%s LIMIT 1", (device_id,))
+        dev_row = cursor.fetchone()
+        if not dev_row or not dev_row.get('post_data'):
+            return
+            
+        customer_code = dev_row.get('customer_code')
+        if not customer_code: return
+        
+        cursor.execute("SELECT is_staging, post_url_live, post_url_staging FROM tblScheduler WHERE customer_code=%s AND isdeleted=0 LIMIT 1", (customer_code,))
+        sch_row = cursor.fetchone()
+        if not sch_row: return
+        
+        is_staging = int(sch_row.get('is_staging') or 0)
+        env_type = "Staging" if is_staging else "Live"
+        target_url = sch_row.get('post_url_staging') if is_staging else sch_row.get('post_url_live')
+        
+        if not target_url or not target_url.strip(): return
+        
+        from dotenv import load_dotenv
+        import os
+        load_dotenv()
+        
+        api_key = os.getenv("WOLOO_API_KEY", "")
+        headers = {'Content-type': 'application/json'}
+        if api_key: 
+            headers["x-api-key"] = api_key
+        
+        status_text = "ERROR"
+        full_response_text = ""
+        try:
+            data = json.loads(payload_str)
+            response = requests.post(target_url, json=data, headers=headers, timeout=5)
+            status_text = str(response.status_code)
+            full_response_text = response.text
+        except Exception as e:
+            status_text = f"Error: {str(e)[:50]}"
+            full_response_text = str(e)
+            
+        cursor.execute("""
+            INSERT INTO tblPostHistory (deviceid, payload, targeturl, responsestatus, env_type, createddate, remarks, payload_type) 
+            VALUES (%s, %s::jsonb, %s, %s, %s, NOW(), %s, %s)
+        """, (device_id, payload_str, target_url, status_text, env_type, full_response_text, payload_type))
+    except Exception as hook_err:
+        print(f"Webhook Dispatch Error: {hook_err}")
 
 def orchestrate_json_payloads():
     """
@@ -145,7 +216,8 @@ def orchestrate_json_payloads():
                                 os.makedirs(target_dir, exist_ok=True)
                                 
                                 safe_dt = datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")
-                                f_path = os.path.join(target_dir, f"{dev_id.replace('+', '').replace(':', '')}_{safe_dt}_sch.json")
+                                f_name_id = _get_alias(dev_id, cursor)
+                                f_path = os.path.join(target_dir, f"{f_name_id.replace('+', '').replace(':', '')}_{safe_dt}_sch.json")
                                 with open(f_path, 'w') as fh:
                                     fh.write(result_payload)
                             except Exception as file_err:
@@ -156,9 +228,8 @@ def orchestrate_json_payloads():
                         cursor.execute("INSERT INTO tblScheduledJsonHistory (deviceid, json_payload, payload_type) VALUES (%s, %s::jsonb, %s)", 
                                       (dev_id, result_payload, payload_type))
                                       
-                        # Push to Dead letter Queue target
-                        cursor.execute("INSERT INTO tblDeadLetterQueue (deviceid, payload, targetUrl) VALUES (%s, %s, %s)", 
-                                      (dev_id, result_payload, "https://api.external.com/submit"))
+                        # Route payload natively through dynamic environment dispatch
+                        _dispatch_webhook(dev_id, result_payload, cursor, payload_type)
                                       
                         # Document execution time internally
                         schedule_id = formatter.get('schedule_id')
@@ -453,16 +524,17 @@ def disk_cleanup_job():
         if not os.path.exists(dir_path):
             continue
             
-        for filename in os.listdir(dir_path):
-            file_path = os.path.join(dir_path, filename)
-            if os.path.isfile(file_path):
-                file_mtime = os.path.getmtime(file_path)
-                if file_mtime < cutoff_time:
-                    try:
-                        os.remove(file_path)
-                        print(f"Deleted old log file: {file_path}")
-                    except Exception as e:
-                        print(f"Failed to delete {file_path}: {e}")
+        for root, dirs, files in os.walk(dir_path):
+            for filename in files:
+                file_path = os.path.join(root, filename)
+                if os.path.isfile(file_path):
+                    file_mtime = os.path.getmtime(file_path)
+                    if file_mtime < cutoff_time:
+                        try:
+                            os.remove(file_path)
+                            print(f"Deleted old log file: {file_path}")
+                        except Exception as e:
+                            print(f"Failed to delete {file_path}: {e}")
 
 def evaluate_active_alerts():
     '''
@@ -568,7 +640,7 @@ def evaluate_active_alerts():
                     overrides['alert_sequence'] = max(list(out_sequences.values()) + [0])
                     
                     payload = _parse_template(template, sp_name, dev_id, overrides)
-                    cursor.execute("INSERT INTO tblDeadLetterQueue (deviceid, payload, targetUrl) VALUES (%s, %s, %s)", (dev_id, payload, target_url))
+                    _dispatch_webhook(dev_id, payload, cursor, 'Alert')
             
             conn.commit()
     except Exception as e:
@@ -687,12 +759,14 @@ def dispatch_tvoc_alerts_job():
                 
                 is_still_bad = False
                 highest_tvoc_in_block = float(b.get('tvoc_value', 0) or 0)
+                last_tvoc_in_block = 0
                 
                 for br in block_rows:
                     voc_match = re.search(r'VOC:([-0-9.]+)', br['revtext'])
                     sh2s_match = re.search(r'SH2S:([-0-9.]+)', br['revtext'])
                     if voc_match and sh2s_match:
                         sum_val = min(15.00, round(float(voc_match.group(1)) + float(sh2s_match.group(1)), 2))
+                        last_tvoc_in_block = sum_val
                         if sum_val > highest_tvoc_in_block:
                             highest_tvoc_in_block = sum_val
                         if sum_val > 12.00:
@@ -718,21 +792,23 @@ def dispatch_tvoc_alerts_job():
                     }
                     payload = _parse_template(template, sp_name, dev_id, overrides)
                     if target_url:
-                        cursor.execute("INSERT INTO tblDeadLetterQueue (deviceid, payload, targetUrl) VALUES (%s, %s, %s)", (dev_id, payload, target_url))
+                        _dispatch_webhook(dev_id, payload, cursor, 'Tvoc Alert')
                     cursor.execute("INSERT INTO tblScheduledJsonHistory (deviceid, json_payload, payload_type) VALUES (%s, %s::jsonb, %s)", (dev_id, payload, 'Alert'))
                     try:
                         from logger import JSON_LOG_DIR
                         safe_dt = datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")
                         target_dir = os.path.join(JSON_LOG_DIR, "Woloo", "Alert")
                         os.makedirs(target_dir, exist_ok=True)
-                        f_path = os.path.join(target_dir, f"{dev_id.replace(':', '').replace('+', '')}_{safe_dt}_Alert_Tvoc.json")
+                        f_name_id = _get_alias(dev_id, cursor)
+                        f_path = os.path.join(target_dir, f"{f_name_id.replace(':', '').replace('+', '')}_{safe_dt}_Alert_Tvoc.json")
                         with open(f_path, 'w', encoding='utf-8') as fh: fh.write(payload)
                     except Exception as e: print("File Save Error:", e)
                     
                     cursor.execute("UPDATE tblAlertBucketTVOC SET count = count + 1, lastupdatedon=%s, continousbad=%s, tvoc_value=%s WHERE slno=%s", (now, diff_mins, highest_tvoc_in_block, b_slno))
                 else:
                     # Resolution! No bad points observed in the specific exact 5 min gap.
-                    cursor.execute("UPDATE tblAlertBucketTVOC SET isResolved=1, currentstatus='Good', statuschangedon=%s, lastupdatedon=%s, continousbad=%s, tvoc_value=%s WHERE slno=%s", (now, now, diff_mins, highest_tvoc_in_block, b_slno))
+                    resolve_val = last_tvoc_in_block if last_tvoc_in_block > 0 else 0.00
+                    cursor.execute("UPDATE tblAlertBucketTVOC SET isResolved=1, currentstatus='Good', statuschangedon=%s, lastupdatedon=%s, continousbad=%s, tvoc_value=%s WHERE slno=%s", (now, now, diff_mins, resolve_val, b_slno))
             
             # 3. Iterate Resolved Alerts (never sent)
             cursor.execute("SELECT * FROM tblAlertBucketTVOC WHERE isResolved=1 AND ResolvedalertSentOn IS NULL")
@@ -758,14 +834,15 @@ def dispatch_tvoc_alerts_job():
                 }
                 payload = _parse_template(template, sp_name, dev_id, overrides)
                 if target_url:
-                    cursor.execute("INSERT INTO tblDeadLetterQueue (deviceid, payload, targetUrl) VALUES (%s, %s, %s)", (dev_id, payload, target_url))
+                    _dispatch_webhook(dev_id, payload, cursor, 'TVOC Resolved')
                 cursor.execute("INSERT INTO tblScheduledJsonHistory (deviceid, json_payload, payload_type) VALUES (%s, %s::jsonb, %s)", (dev_id, payload, 'Resolved'))
                 try:
                     from logger import JSON_LOG_DIR
                     safe_dt = datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")
                     target_dir = os.path.join(JSON_LOG_DIR, "Woloo", "Resolved")
                     os.makedirs(target_dir, exist_ok=True)
-                    f_path = os.path.join(target_dir, f"{dev_id.replace(':', '').replace('+', '')}_{safe_dt}_AlertResolved_Tvoc.json")
+                    f_name_id = _get_alias(dev_id, cursor)
+                    f_path = os.path.join(target_dir, f"{f_name_id.replace(':', '').replace('+', '')}_{safe_dt}_AlertResolved_Tvoc.json")
                     with open(f_path, 'w', encoding='utf-8') as fh: fh.write(payload)
                 except Exception as e: print("File Save Error:", e)
                 cursor.execute("UPDATE tblAlertBucketTVOC SET ResolvedalertSentOn=%s WHERE slno=%s", (now, b_slno))
@@ -776,8 +853,112 @@ def dispatch_tvoc_alerts_job():
     finally:
         if conn: conn.close()
 
+def evaluate_pch_bucket_stream():
+    """
+    Independent 1-minute sweep picking up fresh IoT bursts natively for PCH Alert Bucket states.
+    Evaluates cleanly on 30 minute bounds.
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT slno, deviceid, revText, receivedOn FROM tblDatareceiver WHERE isAlertProcessedPch=0 LIMIT 2000")
+            unprocessed = cursor.fetchall()
+            
+            if not unprocessed:
+                return
+                
+            processed_slnos = []
+            
+            for row in unprocessed:
+                _slno = row['slno']
+                processed_slnos.append(_slno)
+                _dev_id = row['deviceid']
+                _rev_text = row.get('revtext') or row.get('revText', '')
+                _received_on = row['receivedon'] if 'receivedon' in row else row.get('receivedOn')
+                
+                try:
+                    import re
+                    out_match = re.search(r'OUT:([-0-9.]+)', _rev_text)
+                    if out_match:
+                        # 1. Fetch threshold safely
+                        cursor.execute("SELECT c.peoplelimit FROM tblDeviceMaster d LEFT JOIN tblCustomerMaster c ON d.customer_code = c.customer_code WHERE d.deviceid=%s LIMIT 1", (_dev_id,))
+                        th_row = cursor.fetchone()
+                        threshold = float(th_row['peoplelimit']) if th_row and th_row['peoplelimit'] is not None else 10.0
+                        
+                        # 2. Block bounds (30 minutes)
+                        now = datetime.datetime.now()
+                        block_start_minute = (now.minute // 30) * 30
+                        block_start = now.replace(minute=block_start_minute, second=0, microsecond=0)
+                        
+                        # 3. Query Min and Max OUT securely
+                        cursor.execute("""
+                            SELECT revText FROM tblDatareceiverHistory 
+                            WHERE deviceid=%s AND receivedOn >= %s AND receivedOn <= %s
+                        """, (_dev_id, block_start, now))
+                        block_rows = cursor.fetchall()
+                        
+                        outs = []
+                        for br in block_rows:
+                            m = re.search(r'OUT:([-0-9.]+)', br['revtext'])
+                            if m: outs.append(float(m.group(1)))
+                            
+                        if outs:
+                            delta = max(outs) - min(outs)
+                            if delta > threshold:
+                                cursor.execute("SELECT slno FROM tblalertbucketpch WHERE deviceid=%s AND isresolved=0 LIMIT 1", (_dev_id,))
+                                open_bucket = cursor.fetchone()
+                                
+                                if not open_bucket:
+                                    cursor.execute("""
+                                        INSERT INTO tblalertbucketpch (deviceid, CDatetime, people_count_delta, count, currentstatus, continousbad) 
+                                        VALUES (%s, %s, %s, 1, 'Bad', 0) RETURNING slno
+                                    """, (_dev_id, now, delta))
+                                    b_slno = cursor.fetchone()['slno']
+                                    
+                                    # Create FIRST json alert dynamically
+                                    cursor.execute("SELECT jsontemplate, storedprocedurename FROM tbljsonformatter WHERE name='woloo_scheduled_json' AND isdeleted=0 LIMIT 1")
+                                    formatter = cursor.fetchone()
+                                    if formatter:
+                                        template = formatter.get('jsontemplate')
+                                        sp_name = formatter.get('storedprocedurename')
+                                        cursor.execute("SELECT s.post_url_live FROM tblDeviceMaster dm JOIN tblScheduler s ON dm.customer_code = s.customer_code WHERE dm.deviceid=%s LIMIT 1", (_dev_id,))
+                                        s_row = cursor.fetchone()
+                                        target_url = s_row['post_url_live'] if s_row else ''
+                                        
+                                        from scheduler import _parse_template
+                                        overrides = {'triggered_by': 'threshold_breach', 'alert_sequence': 1, 'pcd_bad': 0, 'pch_bad': 0, 'parameters': 'pch'}
+                                        payload = _parse_template(template, sp_name, _dev_id, overrides)
+                                        if target_url:
+                                            _dispatch_webhook(_dev_id, payload, cursor, 'PCH Alert')
+                                        cursor.execute("INSERT INTO tblScheduledJsonHistory (deviceid, json_payload, payload_type) VALUES (%s, %s::jsonb, %s)", (_dev_id, payload, 'Alert'))
+                                        try:
+                                            from logger import JSON_LOG_DIR
+                                            import os
+                                            safe_dt = now.strftime("%d_%m_%Y_%H_%M")
+                                            target_dir = os.path.join(JSON_LOG_DIR, "Woloo", "Alert")
+                                            os.makedirs(target_dir, exist_ok=True)
+                                            f_name_id = _get_alias(_dev_id, cursor)
+                                            f_path = os.path.join(target_dir, f"{f_name_id.replace(':', '').replace('+', '')}_{safe_dt}_Alert_Pch.json")
+                                            with open(f_path, 'w', encoding='utf-8') as fh: fh.write(payload)
+                                        except Exception as e: print("File Save Error:", e)
+                                else:
+                                    b_slno = open_bucket['slno']
+                                    cursor.execute("UPDATE tblalertbucketpch SET people_count_delta=%s, lastupdatedon=%s WHERE slno=%s", (delta, now, b_slno))
+                        
+                except Exception as ex:
+                    print("PCH Bucket Parser Error:", ex)
+
+            if processed_slnos:
+                placeholders = ','.join(['%s'] * len(processed_slnos))
+                cursor.execute(f"UPDATE tblDatareceiver SET isAlertProcessedPch=1 WHERE slno IN ({placeholders})", tuple(processed_slnos))
+            conn.commit()
+    except Exception as e:
+        print("PCH Bucket Stream Error:", e)
+    finally:
+        if conn: conn.close()
+
 def dispatch_pch_alerts_job():
-    print("Running PCH Alert Dispatcher (15 Min Maintenance)...")
+    print("Running PCH Alert Dispatcher (15 Min Sequence Lock)...")
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
@@ -833,7 +1014,7 @@ def dispatch_pch_alerts_job():
                     if delta > threshold:
                         cursor.execute("UPDATE tblalertbucketpch SET count = count + 1, continousbad=%s, lastupdatedon=%s WHERE slno=%s", (diff_mins, now, b_slno))
                         overrides = {
-                            'triggered_by': 'PCH Level Threshold Breach', 
+                            'triggered_by': 'threshold_breach', 
                             'alert_sequence': b['count'], 
                             'pcd_bad': diff_mins, 
                             'pch_bad': diff_mins, 
@@ -842,21 +1023,22 @@ def dispatch_pch_alerts_job():
                         }
                         payload = _parse_template(template, sp_name, dev_id, overrides)
                         if target_url:
-                            cursor.execute("INSERT INTO tblDeadLetterQueue (deviceid, payload, targetUrl) VALUES (%s, %s, %s)", (dev_id, payload, target_url))
+                            _dispatch_webhook(dev_id, payload, cursor, 'PCH Alert')
                         cursor.execute("INSERT INTO tblScheduledJsonHistory (deviceid, json_payload, payload_type) VALUES (%s, %s::jsonb, %s)", (dev_id, payload, 'Alert'))
                         try:
                             from logger import JSON_LOG_DIR
                             safe_dt = datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")
                             target_dir = os.path.join(JSON_LOG_DIR, "Woloo", "Alert")
                             os.makedirs(target_dir, exist_ok=True)
-                            f_path = os.path.join(target_dir, f"{dev_id.replace(':', '').replace('+', '')}_{safe_dt}_Alert_Pch.json")
+                            f_name_id = _get_alias(dev_id, cursor)
+                            f_path = os.path.join(target_dir, f"{f_name_id.replace(':', '').replace('+', '')}_{safe_dt}_Alert_Pch.json")
                             with open(f_path, 'w', encoding='utf-8') as fh: fh.write(payload)
                         except Exception as e: print("File Save Error:", e)
                     else:
-                        cursor.execute("UPDATE tblalertbucketpch SET isresolved=1, currentstatus='Good', statuschangedon=%s, continousbad=%s WHERE slno=%s", (now, diff_mins, b_slno))
+                        cursor.execute("UPDATE tblalertbucketpch SET isresolved=1, currentstatus='Good', statuschangedon=%s, continousbad=%s, people_count_delta=%s WHERE slno=%s", (now, diff_mins, delta, b_slno))
                         cursor.execute("UPDATE tblalertbucketpch SET resolvedalertsenton=%s WHERE slno=%s", (now, b_slno))
                         overrides = {
-                            'triggered_by': 'PCH Level Threshold Resolved', 
+                            'triggered_by': 'threshold_resolved', 
                             'alert_sequence': max(1, b['count']), 
                             'pcd_bad': diff_mins, 
                             'pch_bad': diff_mins, 
@@ -865,19 +1047,20 @@ def dispatch_pch_alerts_job():
                         }
                         payload = _parse_template(template, sp_name, dev_id, overrides)
                         if target_url:
-                            cursor.execute("INSERT INTO tblDeadLetterQueue (deviceid, payload, targetUrl) VALUES (%s, %s, %s)", (dev_id, payload, target_url))
+                            _dispatch_webhook(dev_id, payload, cursor, 'PCH Resolved')
                         cursor.execute("INSERT INTO tblScheduledJsonHistory (deviceid, json_payload, payload_type) VALUES (%s, %s::jsonb, %s)", (dev_id, payload, 'Resolved'))
                         try:
                             from logger import JSON_LOG_DIR
                             safe_dt = datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")
                             target_dir = os.path.join(JSON_LOG_DIR, "Woloo", "Resolved")
                             os.makedirs(target_dir, exist_ok=True)
-                            f_path = os.path.join(target_dir, f"{dev_id.replace(':', '').replace('+', '')}_{safe_dt}_Alert_Pch.json")
+                            f_name_id = _get_alias(dev_id, cursor)
+                            f_path = os.path.join(target_dir, f"{f_name_id.replace(':', '').replace('+', '')}_{safe_dt}_AlertResolved_Pch.json")
                             with open(f_path, 'w', encoding='utf-8') as fh: fh.write(payload)
                         except Exception as e: print("File Save Error:", e)
                 else:
                     diff_mins = int((now - c_datetime).total_seconds() / 60.0) if c_datetime else 0
-                    cursor.execute("UPDATE tblalertbucketpch SET isresolved=1, currentstatus='Good', statuschangedon=%s, continousbad=%s WHERE slno=%s", (now, diff_mins, b_slno))
+                    cursor.execute("UPDATE tblalertbucketpch SET isresolved=1, currentstatus='Good', statuschangedon=%s, continousbad=%s, people_count_delta=0 WHERE slno=%s", (now, diff_mins, b_slno))
                     cursor.execute("UPDATE tblalertbucketpch SET resolvedalertsenton=%s WHERE slno=%s", (now, b_slno))
                     
                     cursor.execute("SELECT s.post_url_live FROM tblDeviceMaster dm JOIN tblScheduler s ON dm.customer_code = s.customer_code WHERE dm.deviceid=%s LIMIT 1", (dev_id,))
@@ -888,7 +1071,7 @@ def dispatch_pch_alerts_job():
                     sp_name = formatter.get('storedprocedurename') or formatter.get('storedProcedureName')
                     
                     overrides = {
-                        'triggered_by': 'PCH Level Threshold Resolved', 
+                        'triggered_by': 'threshold_resolved', 
                         'alert_sequence': max(1, b['count']), 
                         'pcd_bad': diff_mins, 
                         'pch_bad': diff_mins,
@@ -897,12 +1080,12 @@ def dispatch_pch_alerts_job():
                     }
                     payload = _parse_template(template, sp_name, dev_id, overrides)
                     if target_url:
-                        cursor.execute("INSERT INTO tblDeadLetterQueue (deviceid, payload, targetUrl) VALUES (%s, %s, %s)", (dev_id, payload, target_url))
+                        _dispatch_webhook(dev_id, payload, cursor, 'PCH Resolved')
                     cursor.execute("INSERT INTO tblScheduledJsonHistory (deviceid, json_payload, payload_type) VALUES (%s, %s::jsonb, %s)", (dev_id, payload, 'Resolved'))
                     try:
                         from logger import JSON_LOG_DIR
                         safe_dt = datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")
-                        f_path = os.path.join(JSON_LOG_DIR, f"{dev_id.replace(':', '').replace('+', '')}_{safe_dt}_Alert_Pch.json")
+                        f_path = os.path.join(JSON_LOG_DIR, f"{dev_id.replace(':', '').replace('+', '')}_{safe_dt}_AlertResolved_Pch.json")
                         with open(f_path, 'w', encoding='utf-8') as fh: fh.write(payload)
                     except Exception as e: print("File Save Error:", e)
                     
@@ -921,6 +1104,7 @@ def start_schedulers():
     
     scheduler.add_job(dispatch_tvoc_alerts_job, 'interval', minutes=1)
     scheduler.add_job(evaluate_tvoc_bucket_stream, 'interval', minutes=1)
+    scheduler.add_job(evaluate_pch_bucket_stream, 'interval', minutes=1)
     
     scheduler.add_job(db_cleanup_job, 'cron', hour=0, minute=0)
     scheduler.add_job(disk_cleanup_job, 'cron', hour=0, minute=5) # Runs slightly after DB cleanup

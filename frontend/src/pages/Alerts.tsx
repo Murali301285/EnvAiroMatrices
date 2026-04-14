@@ -12,9 +12,11 @@ export default function Alerts() {
     const [fromDate, setFromDate] = useState(todayStr);
     const [toDate, setToDate] = useState(todayStr);
     const [alertType, setAlertType] = useState("TVOC");
+    const [countdown, setCountdown] = useState(60);
 
     const fetchAlerts = useCallback(() => {
         setLoading(true);
+        setCountdown(60);
         let url = `http://${window.location.hostname}:8381/admin/alerts?alert_type=${alertType}`;
         if (fromDate) url += `&from_date=${fromDate}`;
         if (toDate) url += `&to_date=${toDate}`;
@@ -31,11 +33,23 @@ export default function Alerts() {
             .finally(() => setLoading(false));
     }, [fromDate, toDate, alertType]);
 
-    // Initial Load & Auto Refresh (60 seconds)
+    // Initial Load & Reference Fetch
     useEffect(() => {
         fetchAlerts();
-        const interval = setInterval(() => fetchAlerts(), 60000);
-        return () => clearInterval(interval);
+    }, [fetchAlerts]);
+
+    // Live 1-second Countdown Timer
+    useEffect(() => {
+        const timer = setInterval(() => {
+            setCountdown(prev => {
+                if (prev <= 1) {
+                    fetchAlerts();
+                    return 60;
+                }
+                return prev - 1;
+            });
+        }, 1000);
+        return () => clearInterval(timer);
     }, [fetchAlerts]);
 
     const columns = useMemo<ColumnDef<any, any>[]>(() => {
@@ -44,6 +58,18 @@ export default function Alerts() {
                 accessorKey: 'deviceid',
                 header: 'Device ID',
                 cell: info => <span className="font-bold text-slate-800">{info.getValue()}</span>
+            },
+            {
+                accessorKey: 'isresolved',
+                header: 'Bucket State',
+                cell: info => {
+                    const isRes = info.getValue() === 1 || info.getValue() === true;
+                    return (
+                        <span className={`px-2 py-1 rounded-full text-xs font-bold uppercase ${isRes ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-amber-50 text-amber-600 border border-amber-200 animate-pulse'}`}>
+                            {isRes ? 'Resolved' : 'Active'}
+                        </span>
+                    );
+                }
             },
             {
                 accessorKey: 'param_tag',
@@ -97,18 +123,6 @@ export default function Alerts() {
         }
 
         baseCols.push(
-            {
-                accessorKey: 'isresolved',
-                header: 'Bucket State',
-                cell: info => {
-                    const isRes = info.getValue() === 1 || info.getValue() === true;
-                    return (
-                        <span className={`px-2 py-1 rounded-full text-xs font-bold uppercase ${isRes ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-amber-50 text-amber-600 border border-amber-200 animate-pulse'}`}>
-                            {isRes ? 'Resolved' : 'Active'}
-                        </span>
-                    );
-                }
-            },
             {
                 accessorKey: 'resolvedon',
                 header: 'Resolved On',
@@ -184,9 +198,10 @@ export default function Alerts() {
                     <button 
                         onClick={fetchAlerts}
                         title="Manual Refresh"
-                        className="bg-sky-50 text-sky-600 border border-sky-100 hover:bg-sky-100 font-semibold p-1.5 rounded-lg flex items-center transition-all shadow-sm"
+                        className="bg-sky-50 text-sky-600 border border-sky-100 hover:bg-sky-100 font-semibold px-2.5 py-1.5 rounded-lg flex items-center gap-2 transition-all shadow-sm"
                     >
-                        <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
+                        <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+                        <span className="text-xs font-mono font-bold">{countdown}s</span>
                     </button>
                 </div>
             </header>
@@ -200,7 +215,7 @@ export default function Alerts() {
                 />
             </div>
             <div className="mt-2 flex justify-end">
-                 <span className="text-xs text-slate-400 font-mono tracking-widest uppercase">Auto-Syncing every 60s natively</span>
+                 <span className="text-xs text-slate-400 font-mono tracking-widest uppercase">Auto-Syncing in {countdown}s natively</span>
             </div>
         </div>
     );

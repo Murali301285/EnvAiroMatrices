@@ -7,7 +7,7 @@ import * as XLSX from 'xlsx';
 import html2canvas from 'html2canvas';
 import type { ColumnDef } from '@tanstack/react-table';
 import DataTable from '../components/DataTable';
-import { Filter, Download, ArrowLeft, ArrowRight, ChevronsLeft, ChevronsRight, Building2, Cpu, Maximize, Minimize2, ChevronUp, ChevronDown, FileJson } from 'lucide-react';
+import { Filter, Download, ArrowLeft, ArrowRight, ChevronsLeft, ChevronsRight, Building2, Cpu, Maximize, Minimize2, ChevronUp, ChevronDown, FileJson, RefreshCw } from 'lucide-react';
 import Select from 'react-select';
 import { toast } from '../utils/toast';
 
@@ -22,6 +22,7 @@ export default function Dashboard({ latestData }: { latestData: string }) {
     const [toDate, setToDate] = useState('');
     const [limit, setLimit] = useState<number>(1000);
     const [autoRefresh, setAutoRefresh] = useState(false);
+    const [countdown, setCountdown] = useState(120);
 
     // Dynamic Mapping State
     const [deviceParams, setDeviceParams] = useState<any[]>([]);
@@ -52,6 +53,7 @@ export default function Dashboard({ latestData }: { latestData: string }) {
     const [isMinuteDataOpen, setIsMinuteDataOpen] = useState(true);
     const [isRawDataOpen, setIsRawDataOpen] = useState(true);
     const [isJsonDataOpen, setIsJsonDataOpen] = useState(true);
+    const [isChartOpen, setIsChartOpen] = useState(true);
     const [isChartFullscreen, setIsChartFullscreen] = useState(false);
 
     const aqiRef = useRef<any>(null);
@@ -302,9 +304,17 @@ export default function Dashboard({ latestData }: { latestData: string }) {
     useEffect(() => {
         let interval: ReturnType<typeof setInterval>;
         if (autoRefresh) {
-            fetchTelemetry();
-            fetchJsonHistory();
-            interval = setInterval(() => { fetchTelemetry(); fetchJsonHistory(); }, 120000);
+            setCountdown(120);
+            interval = setInterval(() => { 
+                setCountdown(prev => {
+                    if (prev <= 1) {
+                        fetchTelemetry();
+                        fetchJsonHistory();
+                        return 120;
+                    }
+                    return prev - 1;
+                });
+            }, 1000);
         }
         return () => {
             if (interval) clearInterval(interval);
@@ -453,8 +463,20 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                             </span>
                         )}
                     </div>
-                    <div className="bg-slate-100 p-1 rounded-full text-slate-500 hover:text-slate-800 hover:bg-slate-200 transition-colors">
-                        {isFilterOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                    <div className="flex items-center gap-3">
+                        {!isFilterOpen && autoRefresh && (
+                            <button 
+                                onClick={(e) => { e.stopPropagation(); fetchTelemetry(); fetchJsonHistory(); setCountdown(120); }}
+                                title="Manual Refresh"
+                                className="flex items-center gap-1.5 text-xs font-mono font-bold text-sky-600 bg-sky-50 hover:bg-sky-100 px-2 py-1 rounded transition-colors"
+                            >
+                                <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
+                                {countdown}s
+                            </button>
+                        )}
+                        <div className="bg-slate-100 p-1 rounded-full text-slate-500 hover:text-slate-800 hover:bg-slate-200 transition-colors">
+                            {isFilterOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                        </div>
                     </div>
                 </div>
 
@@ -516,25 +538,11 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                                 </select>
                             </div>
 
-                            <button
-                                onClick={() => { fetchTelemetry(); fetchJsonHistory(); }}
-                                disabled={loading || !selectedDevice?.value}
-                                className="bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-white font-semibold px-6 py-2 rounded-lg flex items-center gap-2 transition-all shadow-lg shadow-emerald-500/20 hover:shadow-emerald-500/40 disabled:opacity-50 disabled:cursor-not-allowed text-sm h-[38px]"
-                            >
-                                <Filter size={16} className={loading ? 'animate-pulse' : ''} /> Show
-                            </button>
-
-                            <div className="flex items-center gap-4 ml-auto lg:ml-4 border border-slate-200 px-4 py-2 rounded-lg bg-slate-50/50 h-[38px]">
-                                <label className="flex items-center gap-2 text-sm font-medium text-slate-600 cursor-pointer select-none">
-                                    <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} className="rounded text-indigo-500 focus:ring-indigo-500 w-4 h-4 cursor-pointer" />
-                                    Auto Refresh (2m)
-                                </label>
-                            </div>
                         </div>
 
-                        {/* Sub-Checkboxes (Dynamically injected from parameter mapping) */}
-                        {deviceParams.length > 0 && (
-                            <div className="flex flex-wrap items-center gap-4 pt-2 border-t border-slate-100 mt-1">
+                        <div className="flex flex-wrap items-center justify-between gap-4 pt-2 border-t border-slate-100 mt-2">
+                            {/* Sub-Checkboxes (Dynamically injected from parameter mapping) */}
+                            <div className="flex flex-wrap items-center gap-4">
                                 {deviceParams.map(dp => (
                                     <label key={dp.parametername} className="flex items-center gap-2 text-sm font-medium text-slate-600 cursor-pointer bg-slate-50 px-3 py-1.5 rounded-md border border-slate-200/60 hover:border-slate-300 transition-colors select-none">
                                         <input
@@ -548,7 +556,40 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                                     </label>
                                 ))}
                             </div>
-                        )}
+
+                            <div className="flex items-center flex-wrap gap-3 ml-auto">
+                                <button
+                                    onClick={() => { fetchTelemetry(); fetchJsonHistory(); setCountdown(120); }}
+                                    disabled={loading || !selectedDevice?.value}
+                                    className="bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-white font-semibold px-6 py-2 rounded-lg flex items-center gap-2 transition-all shadow-lg shadow-emerald-500/20 hover:shadow-emerald-500/40 disabled:opacity-50 disabled:cursor-not-allowed text-sm h-[38px]"
+                                >
+                                    <Filter size={16} className={loading ? 'animate-pulse' : ''} /> Show
+                                </button>
+
+                                <div className={`flex items-center gap-3 border px-3 py-1.5 rounded-lg h-[38px] transition-all bg-slate-50/50 ${autoRefresh ? 'border-emerald-500 shadow-sm' : 'border-slate-200'}`}>
+                                    <label className="flex items-center gap-2 text-sm font-medium text-slate-600 cursor-pointer select-none">
+                                        <input type="checkbox" checked={autoRefresh} onChange={e => { setAutoRefresh(e.target.checked); if(e.target.checked) setCountdown(120); }} className="rounded text-indigo-500 focus:ring-indigo-500 w-4 h-4 cursor-pointer" />
+                                        Auto Refresh (2m)
+                                    </label>
+                                    
+                                    {autoRefresh && (
+                                        <>
+                                            <div className="w-px h-4 bg-slate-200"></div>
+                                            <button 
+                                                onClick={() => { fetchTelemetry(); fetchJsonHistory(); setCountdown(120); }}
+                                                title="Manual Refresh"
+                                                className="flex items-center gap-1.5 text-xs font-mono font-bold text-sky-600 bg-sky-50 hover:bg-sky-100 px-2 py-1 rounded transition-colors"
+                                            >
+                                                <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
+                                                {countdown}s
+                                            </button>
+                                        </>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+
 
                         {/* Meta Bar */}
                         {selectedDevice?.value && (
@@ -567,23 +608,32 @@ export default function Dashboard({ latestData }: { latestData: string }) {
             </div>
 
             {/* DYNAMIC DASHBOARD CHART (Render mapped lines dynamically using Recharts) */}
-            <div className={isChartFullscreen ? "fixed inset-0 z-[100] bg-white p-6 flex flex-col overflow-hidden" : "bg-white rounded-2xl border border-slate-100 p-6 shadow-sm mb-6 flex flex-col"} ref={aqiRef}>
-                <div className="flex items-center justify-between mb-6">
+            <div className={isChartFullscreen ? "fixed inset-0 z-[100] bg-white p-6 flex flex-col overflow-hidden" : "bg-white rounded-2xl border border-slate-100 shadow-sm mb-6 flex flex-col pt-4 px-6 pb-6"} ref={aqiRef}>
+                <div 
+                    className={`flex items-center justify-between cursor-pointer hover:text-indigo-600 transition-colors ${!isChartOpen ? 'mb-0 pb-0' : 'mb-6'}`}
+                    onClick={() => !isChartFullscreen && setIsChartOpen(!isChartOpen)}
+                >
                     <h3 className="text-xl font-bold text-indigo-600 flex items-center gap-2">
                         <span className="w-1.5 h-6 bg-indigo-500 rounded-full"></span>
-                        Dashboard
+                        Dashboard {isChartOpen ? '' : `(${dataList.length} rows)`}
                     </h3>
-                    <div className="flex items-center gap-3">
-                        <button onClick={() => handleDownloadChart(aqiRef, 'Telemetry_Dashboard.png')} className="bg-indigo-50 hover:bg-indigo-100 text-indigo-600 font-semibold px-4 py-2 rounded-lg text-sm flex items-center gap-2 transition-colors">
+                    <div className="flex items-center gap-3" onClick={e => e.stopPropagation()}>
+                        <button onClick={() => handleDownloadChart(aqiRef, 'Telemetry_Dashboard.png')} className="bg-indigo-50 hover:bg-indigo-100 text-indigo-600 font-semibold px-4 py-2 rounded-lg text-sm flex items-center gap-2 transition-colors border border-indigo-100">
                             <Download size={14} /> Download PNG
                         </button>
-                        <button onClick={() => setIsChartFullscreen(!isChartFullscreen)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold p-2 rounded-lg flex items-center gap-2 transition-colors" title={isChartFullscreen ? "Exit Fullscreen" : "Fullscreen"}>
+                        <button onClick={() => setIsChartFullscreen(!isChartFullscreen)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold p-2 rounded-lg flex items-center gap-2 transition-colors border border-slate-200" title={isChartFullscreen ? "Exit Fullscreen" : "Fullscreen"}>
                             {isChartFullscreen ? <Minimize2 size={16} /> : <Maximize size={16} />}
                         </button>
+                        {!isChartFullscreen && (
+                            <div className="bg-slate-100 p-1 rounded-full text-slate-500 hover:text-slate-800 hover:bg-slate-200 transition-colors cursor-pointer ml-2" onClick={() => setIsChartOpen(!isChartOpen)}>
+                                {isChartOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                            </div>
+                        )}
                     </div>
                 </div>
 
-                <div className={`w-full ${isChartFullscreen ? 'flex-1 min-h-0' : 'h-[450px]'}`}>
+                {isChartOpen && (
+                    <div className={`w-full ${isChartFullscreen ? 'flex-1 min-h-0' : 'h-[450px]'}`}>
                     <ResponsiveContainer width="100%" height="100%">
                         <LineChart data={dataList} margin={{ top: 20, right: 30, left: 10, bottom: 20 }}>
                             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
@@ -610,7 +660,8 @@ export default function Dashboard({ latestData }: { latestData: string }) {
                             ))}
                         </LineChart>
                     </ResponsiveContainer>
-                </div>
+                    </div>
+                )}
             </div>
 
             {/* MINUTE DATA TABLE */}

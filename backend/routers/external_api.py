@@ -20,6 +20,12 @@ class ThresholdPayload(BaseModel):
     limit: int
     key: Optional[str] = None
 
+class LocationPayload(BaseModel):
+    deviceid: str
+    location: str
+    address: str
+    key: Optional[str] = None
+
 def _log_api_access(apiname: str, source: str, params: dict, status: str, remarks: str = ""):
     conn = get_db_connection()
     try:
@@ -61,18 +67,20 @@ async def set_working_hours(payload: WorkingHoursPayload, request: Request):
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
-            # Verify device explicitly
-            cursor.execute("SELECT slno FROM tblDeviceMaster WHERE deviceid=%s", (payload.deviceid,))
-            if not cursor.fetchone():
-                _log_api_access("/setworkinghours", caller, log_params, "Error", "Device ID not found")
-                return {"status": "failed", "message": "Device ID not found"}
+            # Verify device explicitly (MAC or Alias)
+            cursor.execute("SELECT deviceid FROM tblDeviceMaster WHERE deviceid=%s OR alias=%s", (payload.deviceid, payload.deviceid))
+            row = cursor.fetchone()
+            if not row:
+                _log_api_access("/setworkinghours", caller, log_params, "Error", "Device ID or Alias not found")
+                return {"status": "failed", "message": "Device ID or Alias not found"}
                 
+            actual_device_id = row['deviceid']
             hours_json = json.dumps({"start": payload.start, "end": payload.end})
             cursor.execute("""
                 UPDATE tblDeviceMaster 
                 SET working_hours_json = %s::jsonb, updatedby = 'via API', updatedDate = CURRENT_TIMESTAMP
                 WHERE deviceid = %s
-            """, (hours_json, payload.deviceid))
+            """, (hours_json, actual_device_id))
             
         conn.commit()
         _log_api_access("/setworkinghours", caller, log_params, "OK", "Inserted successfully")
@@ -83,6 +91,42 @@ async def set_working_hours(payload: WorkingHoursPayload, request: Request):
     finally:
         if conn: conn.close()
 
+@router.post("/setlocation")
+async def set_location(payload: LocationPayload, request: Request):
+    caller = request.client.host if request.client else "Unknown"
+    log_params = payload.dict()
+    if 'key' in log_params: del log_params['key'] # Don't log secret key
+    
+    if not _validate_auth(request, payload.key):
+        _log_api_access(apiname="/setlocation", source=caller, params=log_params, status="Error", remarks="Unauthorized - Invalid API Key")
+        return {"status": "failed", "message": "Unauthorized API Access"}
+        
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            # Verify device explicitly (MAC or Alias)
+            cursor.execute("SELECT deviceid FROM tblDeviceMaster WHERE deviceid=%s OR alias=%s", (payload.deviceid, payload.deviceid))
+            row = cursor.fetchone()
+            if not row:
+                _log_api_access("/setlocation", caller, log_params, "Error", "Device ID or Alias not found")
+                return {"status": "failed", "message": "Device ID or Alias not found"}
+                
+            actual_device_id = row['deviceid']
+            
+            cursor.execute("""
+                UPDATE tblDeviceMaster 
+                SET location = %s, address = %s, updatedby = 'via API', updatedDate = CURRENT_TIMESTAMP
+                WHERE deviceid = %s
+            """, (payload.location, payload.address, actual_device_id))
+            
+        conn.commit()
+        _log_api_access("/setlocation", caller, log_params, "OK", "Location and Address updated successfully")
+        return {"status": "OK", "message": "Location and Address updated successfully"}
+    except Exception as e:
+        _log_api_access("/setlocation", caller, log_params, "Error", str(e))
+        return {"status": "failed", "message": f"Database error: {str(e)}"}
+    finally:
+        if conn: conn.close()
 
 @router.post("/setpeoplethreshold")
 async def set_people_threshold(payload: ThresholdPayload, request: Request):

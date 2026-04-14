@@ -21,6 +21,7 @@ import Events from './pages/Events';
 import Alerts from './pages/Alerts';
 import Login from './pages/Login';
 import ApiLogs from './pages/ApiLogs';
+import ApiMonitor from './pages/ApiMonitor';
 
 export default function App() {
   const [dbStatus, setDbStatus] = useState<string>("Disconnected");
@@ -69,6 +70,7 @@ export default function App() {
           <Route path="/error" element={<ErrorPage />} />
           <Route path="/events" element={<Events />} />
           <Route path="/api-logs" element={<ApiLogs />} />
+          <Route path="/api-monitor" element={<ApiMonitor />} />
         </Route>
       </Routes>
     </BrowserRouter>

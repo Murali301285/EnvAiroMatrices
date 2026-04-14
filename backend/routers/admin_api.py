@@ -75,7 +75,7 @@ def get_alerts(from_date: str = None, to_date: str = None, alert_type: str = "TV
                    count as alertsequence, 
                    TO_CHAR(lastupdatedon, 'YYYY-MM-DD HH24:MI:SS') as lastrunon, 
                    continousbad as consucutive_minutes, isResolved as isresolved, 
-                   TO_CHAR(statuschangedon, 'YYYY-MM-DD HH24:MI:SS') as resolvedon, 
+                   CASE WHEN isResolved=1 THEN TO_CHAR(statuschangedon, 'YYYY-MM-DD HH24:MI:SS') ELSE NULL END as resolvedon, 
                    currentstatus, tvoc_value 
             FROM tblAlertBucketTVOC
             WHERE 1=1
@@ -97,7 +97,7 @@ def get_alerts(from_date: str = None, to_date: str = None, alert_type: str = "TV
                    count as alertsequence, 
                    TO_CHAR(lastupdatedon, 'YYYY-MM-DD HH24:MI:SS') as lastrunon, 
                    continousbad as consucutive_minutes, isresolved, 
-                   TO_CHAR(statuschangedon, 'YYYY-MM-DD HH24:MI:SS') as resolvedon, 
+                   CASE WHEN isresolved=1 THEN TO_CHAR(statuschangedon, 'YYYY-MM-DD HH24:MI:SS') ELSE NULL END as resolvedon, 
                    currentstatus, people_count_delta as tvoc_value 
             FROM tblalertbucketpch
             WHERE 1=1
@@ -119,7 +119,7 @@ def get_alerts(from_date: str = None, to_date: str = None, alert_type: str = "TV
                    AlertSequence as alertsequence, 
                    TO_CHAR(LastRunOn, 'YYYY-MM-DD HH24:MI:SS') as lastrunon, 
                    consucutive_minutes, isResolved as isresolved, 
-                   TO_CHAR(ResolvedOn, 'YYYY-MM-DD HH24:MI:SS') as resolvedon 
+                   CASE WHEN isResolved=1 THEN TO_CHAR(ResolvedOn, 'YYYY-MM-DD HH24:MI:SS') ELSE NULL END as resolvedon 
             FROM tblAlertScheduler
             WHERE param_tag = %s
         """
@@ -133,6 +133,28 @@ def get_alerts(from_date: str = None, to_date: str = None, alert_type: str = "TV
             
         query += " ORDER BY slno DESC LIMIT 100"
         return execute_query(query, tuple(params))
+
+# ----- API DISPATCH MONITOR -----
+@router.get("/api-dispatch-monitor")
+def get_api_dispatch(from_date: str = None, to_date: str = None):
+    query = """
+        SELECT p.slno, dm.alias as device_alias, p.deviceid, p.env_type, p.payload_type, p.targeturl, p.responsestatus, p.remarks,
+               TO_CHAR(p.createddate, 'YYYY-MM-DD HH24:MI:SS') as postedon,
+               p.payload
+        FROM tblPostHistory p
+        LEFT JOIN tblDeviceMaster dm ON p.deviceid = dm.deviceid
+        WHERE p.isdeleted=0 OR p.isdeleted IS NULL
+    """
+    params = []
+    if from_date:
+        query += " AND DATE(p.createddate) >= %s"
+        params.append(from_date)
+    if to_date:
+        query += " AND DATE(p.createddate) <= %s"
+        params.append(to_date)
+        
+    query += " ORDER BY p.slno DESC LIMIT 200"
+    return execute_query(query, tuple(params))
 
 # ----- CUSTOMERS -----
 @router.get("/customers")

@@ -4,7 +4,7 @@ import {
     Menu, Search, Bell, Mail,
     LayoutDashboard, Users, HardDrive, Settings,
     FileJson, ChevronDown, ChevronRight,
-    Zap, Shield, Code, List, Calendar, AlertTriangle, Radio, Activity
+    Zap, Shield, Code, List, Calendar, AlertTriangle, Radio, Activity, Globe
 } from 'lucide-react';
 import { toast } from './utils/toast';
 
@@ -42,7 +42,7 @@ export default function Layout({ }: { wsStatus?: string }) {
                 localStorage.removeItem('env_user');
                 toast.error("Session time out");
                 navigate('/');
-            }, 300000); // 5 minutes strictly
+            }, 1800000); // 30 minutes strictly
         };
 
         const events = ['mousemove', 'keydown', 'click', 'scroll'];
@@ -95,6 +95,7 @@ export default function Layout({ }: { wsStatus?: string }) {
             title: 'Logs',
             items: [
                 { name: 'Alert Monitor', path: '/alerts', icon: <Activity size={18} /> },
+                { name: 'API Post Monitor', path: '/api-monitor', icon: <Globe size={18} /> },
                 { name: 'API Access Logs', path: '/api-logs', icon: <Code size={18} /> },
                 { name: 'Error', path: '/error', icon: <AlertTriangle size={18} /> },
                 { name: 'Events', path: '/events', icon: <Radio size={18} /> },
