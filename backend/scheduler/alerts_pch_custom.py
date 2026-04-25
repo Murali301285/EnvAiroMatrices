@@ -86,7 +86,7 @@ def evaluate_custom_pch_alerts():
                     # 3. Cooldown check
                     cooldown_start = now - datetime.timedelta(minutes=cooldown_mins)
                     cursor.execute(
-                        "SELECT slno, created_on FROM tbl_pch_alert WHERE deviceid=%s AND created_on >= %s ORDER BY slno DESC LIMIT 1",
+                        "SELECT slno, created_on FROM tbl_pch_alert WHERE deviceid=%s AND created_on >= %s AND isAlertrequired=True ORDER BY slno DESC LIMIT 1",
                         (dev_id, cooldown_start)
                     )
                     recent_alert = cursor.fetchone()
@@ -149,6 +149,17 @@ def evaluate_custom_pch_alerts():
                             """,
                             (dev_id, timeframe_mins, start_time, end_time, max_count, min_count, pch_count, threshold, True, True, is_posted, remarks)
                         )
+                else:
+                    # Log evaluation even if threshold is not met
+                    remarks = "Threshold not breached"
+                    cursor.execute(
+                        """
+                        INSERT INTO tbl_pch_alert 
+                        (deviceid, timeframe, from_datetime, to_datetime, Max_count, Min_count, PchCount, people_count_threshold_limit, isAlertrequired, isJsonCreated, isJSONposted, remarks)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (dev_id, timeframe_mins, start_time, end_time, max_count, min_count, pch_count, threshold, False, False, False, remarks)
+                    )
                         
             conn.commit()
     except Exception as e:
