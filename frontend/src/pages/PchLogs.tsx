@@ -85,13 +85,21 @@ export default function PchLogs() {
             )
         },
         {
-            id: 'pch_stats',
-            header: 'PCH Stats',
+            id: 'out_raw',
+            header: 'OUT_RAW',
             cell: info => (
                 <div className="flex flex-col text-xs">
                     <span className="text-emerald-600 font-semibold">Max: {info.row.original.max_count}</span>
                     <span className="text-rose-500 font-semibold">Min: {info.row.original.min_count}</span>
-                    <span className="text-slate-700 font-bold mt-0.5">Net: {info.row.original.pchcount}</span>
+                </div>
+            )
+        },
+        {
+            id: 'pch_stats',
+            header: 'PCH Stats',
+            cell: info => (
+                <div className="flex flex-col text-xs">
+                    <span className="text-slate-700 font-bold">Net PCH: {info.row.original.pchcount}</span>
                 </div>
             )
         },
