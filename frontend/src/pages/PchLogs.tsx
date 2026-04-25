@@ -89,8 +89,8 @@ export default function PchLogs() {
             header: 'OUT_RAW',
             cell: info => (
                 <div className="flex flex-col text-xs">
-                    <span className="text-emerald-600 font-semibold">Max: {info.row.original.max_count}</span>
                     <span className="text-rose-500 font-semibold">Min: {info.row.original.min_count}</span>
+                    <span className="text-emerald-600 font-semibold">Max: {info.row.original.max_count}</span>
                 </div>
             )
         },
