@@ -160,8 +160,8 @@ export default function PchLogs() {
                 <h3 className="text-lg font-bold text-slate-700 mb-6 flex items-center gap-2">
                      People Count Monitoring (PCH) Status over Time
                 </h3>
-                <div className="flex-1 w-full">
-                    <ResponsiveContainer width="100%" height="100%">
+                <div className="flex-1 w-full min-h-[400px]">
+                    <ResponsiveContainer width="100%" height="100%" minHeight={400}>
                         <LineChart data={chartData} margin={{ top: 20, right: 30, left: 10, bottom: 20 }}>
                             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                             <XAxis 
