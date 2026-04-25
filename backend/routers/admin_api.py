@@ -521,3 +521,7 @@ def get_event_logs(date: str = None):
         "data": list(reversed(logs))
     }
 
+@router.get("/pch-logs")
+def get_pch_logs(limit: int = 100):
+    query = "SELECT slno, deviceid, timeframe, TO_CHAR(from_datetime, 'YYYY-MM-DD HH24:MI:SS') as from_datetime, TO_CHAR(to_datetime, 'YYYY-MM-DD HH24:MI:SS') as to_datetime, Max_count, Min_count, PchCount, people_count_threshold_limit, isAlertrequired, TO_CHAR(created_on, 'YYYY-MM-DD HH24:MI:SS') as created_on, isJsonCreated, isJSONposted, remarks FROM tbl_pch_alert ORDER BY slno DESC LIMIT %s"
+    return execute_query(query, (limit,))

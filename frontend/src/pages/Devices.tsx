@@ -27,6 +27,11 @@ export default function Devices() {
     const [formCreateJsonFile, setFormCreateJsonFile] = useState(false);
     const [formPostData, setFormPostData] = useState(false);
     const [formRemarks, setFormRemarks] = useState("");
+    
+    // PCH Alert Fields
+    const [formPchTimeframe, setFormPchTimeframe] = useState("60");
+    const [formPchThreshold, setFormPchThreshold] = useState("0");
+    const [formPchCooldown, setFormPchCooldown] = useState("30");
 
     const fetchData = async () => {
         setLoading(true);
@@ -72,7 +77,13 @@ export default function Devices() {
             alias: formAlias,
             location: formLocation,
             address: formAddress,
-            working_hours_json: { start: formWhStart, end: formWhEnd },
+            working_hours_json: { 
+                start: formWhStart, 
+                end: formWhEnd,
+                pch_timeframe_mins: parseInt(formPchTimeframe) || 0,
+                pch_threshold: parseInt(formPchThreshold) || 0,
+                pch_cooldown_mins: parseInt(formPchCooldown) || 30
+            },
             active: formActive ? 1 : 0,
             create_json_file: formCreateJsonFile,
             post_data: formPostData,
@@ -104,12 +115,19 @@ export default function Devices() {
 
         // Handle nested working JSON format safe-guard
         let whStart = "09:00", whEnd = "18:00";
+        let pch_tf = "60", pch_th = "0", pch_cd = "30";
         if (row.working_hours_json && typeof row.working_hours_json === 'object') {
             whStart = row.working_hours_json.start || "09:00";
             whEnd = row.working_hours_json.end || "18:00";
+            pch_tf = (row.working_hours_json.pch_timeframe_mins || 60).toString();
+            pch_th = (row.working_hours_json.pch_threshold || 0).toString();
+            pch_cd = (row.working_hours_json.pch_cooldown_mins || 30).toString();
         }
         setFormWhStart(whStart);
         setFormWhEnd(whEnd);
+        setFormPchTimeframe(pch_tf);
+        setFormPchThreshold(pch_th);
+        setFormPchCooldown(pch_cd);
 
         setFormActive(row.active === 1 || row.active === true);
         setFormCreateJsonFile(row.create_json_file === 1 || row.create_json_file === true);
@@ -149,6 +167,9 @@ export default function Devices() {
         setFormCreateJsonFile(false);
         setFormPostData(false);
         setFormRemarks("");
+        setFormPchTimeframe("60");
+        setFormPchThreshold("0");
+        setFormPchCooldown("30");
     };
 
     // Prepare dropdown options
@@ -332,6 +353,25 @@ export default function Devices() {
                                     <div>
                                         <label className="block text-sm font-medium text-slate-600 mb-1">To</label>
                                         <input type="time" value={formWhEnd} onChange={e => setFormWhEnd(e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm bg-white" />
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-3 gap-4 pt-2 border-t border-slate-200/60 mt-2">
+                                    <div>
+                                        <label className="block text-xs font-medium text-slate-600 mb-1">PCH Time Frame</label>
+                                        <select value={formPchTimeframe} onChange={e => setFormPchTimeframe(e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm bg-white">
+                                            <option value="15">15 Mins</option>
+                                            <option value="30">30 Mins</option>
+                                            <option value="60">1 Hour</option>
+                                            <option value="1440">1 Day</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-medium text-slate-600 mb-1">PCH Threshold</label>
+                                        <input type="number" min="0" value={formPchThreshold} onChange={e => setFormPchThreshold(e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm bg-white" placeholder="e.g. 60" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-medium text-slate-600 mb-1">Alert Cooldown (Mins)</label>
+                                        <input type="number" min="0" value={formPchCooldown} onChange={e => setFormPchCooldown(e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm bg-white" placeholder="e.g. 30" />
                                     </div>
                                 </div>
                             </div>
