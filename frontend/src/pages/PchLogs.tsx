@@ -1,24 +1,61 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import axios from 'axios';
-import { Activity, AlertCircle } from 'lucide-react';
+import { Activity, AlertCircle, Calendar, Filter, RefreshCw } from 'lucide-react';
 import type { ColumnDef } from '@tanstack/react-table';
 import DataTable from '../components/DataTable';
 
 export default function PchLogs() {
     const [logs, setLogs] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
+    
+    const [fromDate, setFromDate] = useState(() => {
+        const d = new Date();
+        return d.toISOString().split('T')[0];
+    });
+    const [toDate, setToDate] = useState(() => {
+        const d = new Date();
+        return d.toISOString().split('T')[0];
+    });
+    
+    const [countdown, setCountdown] = useState(60);
+
+    const fetchLogs = useCallback(async (showLoader = true) => {
+        if (showLoader) setLoading(true);
+        try {
+            const res = await axios.get(`http://${window.location.hostname}:8381/admin/pch-logs`, {
+                params: { from_date: fromDate, to_date: toDate }
+            });
+            if (res.data?.status === 'success') {
+                setLogs(res.data.data || []);
+            }
+        } catch (error) {
+            console.error(error);
+        } finally {
+            if (showLoader) setLoading(false);
+        }
+    }, [fromDate, toDate]);
 
     useEffect(() => {
-        setLoading(true);
-        axios.get(`http://${window.location.hostname}:8381/admin/pch-logs`)
-            .then(res => {
-                if (res.data?.status === 'success') {
-                    setLogs(res.data.data || []);
-                }
-            })
-            .catch(console.error)
-            .finally(() => setLoading(false));
+        fetchLogs();
     }, []);
+
+    useEffect(() => {
+        const timer = setInterval(() => {
+            setCountdown((prev) => {
+                if (prev <= 1) {
+                    fetchLogs(false);
+                    return 60;
+                }
+                return prev - 1;
+            });
+        }, 1000);
+        return () => clearInterval(timer);
+    }, [fetchLogs]);
+
+    const handleFilter = () => {
+        setCountdown(60);
+        fetchLogs();
+    };
 
     const columns = useMemo<ColumnDef<any, any>[]>(() => [
         {
@@ -88,13 +125,48 @@ export default function PchLogs() {
 
     return (
         <div className="flex flex-col h-full max-w-7xl mx-auto">
-            <header className="flex items-center justify-between mb-6 shrink-0">
+            <header className="flex flex-col md:flex-row md:items-center justify-between mb-6 shrink-0 gap-4">
                 <div>
                     <h2 className="text-2xl font-bold text-slate-800 tracking-tight flex items-center gap-3">
                         <span className="p-2 bg-purple-50 rounded-xl text-purple-600"><Activity size={20} /></span>
                         PCH Logs
                     </h2>
                     <p className="text-slate-500 mt-1 text-sm font-medium">View people count threshold alert evaluations.</p>
+                </div>
+                
+                <div className="flex flex-wrap items-center gap-3 bg-white p-2 rounded-2xl shadow-sm border border-slate-100">
+                    <div className="flex items-center gap-2 pl-2">
+                        <Calendar size={16} className="text-slate-400" />
+                        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">From</span>
+                        <input 
+                            type="date" 
+                            value={fromDate}
+                            onChange={(e) => setFromDate(e.target.value)}
+                            className="text-sm bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 outline-none text-slate-700 font-medium"
+                        />
+                    </div>
+                    <div className="w-px h-6 bg-slate-200"></div>
+                    <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">To</span>
+                        <input 
+                            type="date" 
+                            value={toDate}
+                            onChange={(e) => setToDate(e.target.value)}
+                            className="text-sm bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 outline-none text-slate-700 font-medium"
+                        />
+                    </div>
+                    
+                    <button 
+                        onClick={handleFilter}
+                        className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-white px-4 py-1.5 rounded-lg text-sm font-medium transition-all shadow-md shadow-slate-800/20 ml-2"
+                    >
+                        <Filter size={16} /> Filter
+                    </button>
+                    
+                    <div className="flex items-center gap-2 bg-blue-50 text-blue-600 px-3 py-1.5 rounded-lg border border-blue-100/50">
+                        <RefreshCw size={14} className={countdown <= 5 ? "animate-spin" : ""} />
+                        <span className="text-sm font-bold w-6 text-center">{countdown}s</span>
+                    </div>
                 </div>
             </header>
 
@@ -115,3 +187,4 @@ export default function PchLogs() {
         </div>
     );
 }
+
