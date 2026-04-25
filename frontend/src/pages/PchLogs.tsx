@@ -105,7 +105,11 @@ export default function PchLogs() {
             header: 'Flags',
             cell: info => (
                 <div className="flex gap-1 flex-wrap max-w-[120px]">
-                    {info.row.original.isalertrequired && <span className="text-[10px] bg-amber-100 text-amber-700 px-1 rounded font-bold">Alert Reqd</span>}
+                    {info.row.original.isalertrequired ? (
+                        <span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded font-bold border border-red-200 shadow-sm animate-pulse">! ALERT REQD</span>
+                    ) : (
+                        <span className="text-[10px] bg-slate-100 text-slate-500 px-1 rounded font-bold">No Alert</span>
+                    )}
                     {info.row.original.isjsoncreated && <span className="text-[10px] bg-blue-100 text-blue-700 px-1 rounded font-bold">JSON</span>}
                     {info.row.original.isjsonposted && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1 rounded font-bold">Posted</span>}
                 </div>
@@ -181,6 +185,7 @@ export default function PchLogs() {
                         data={logs}
                         exportFilename="PCH_Alert_Logs"
                         searchPlaceholder="Search Device ID or Remarks..."
+                        rowClassName={(row) => row.isalertrequired ? "bg-red-50/60 border-l-4 border-red-500" : ""}
                     />
                 )}
             </div>

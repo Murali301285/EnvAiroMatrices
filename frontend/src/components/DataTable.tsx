@@ -16,13 +16,15 @@ interface DataTableProps<T> {
     columns: ColumnDef<T, any>[];
     exportFilename?: string;
     searchPlaceholder?: string;
+    rowClassName?: (row: T) => string;
 }
 
 export default function DataTable<T>({
     data,
     columns,
     exportFilename = "Export",
-    searchPlaceholder = "Search records..."
+    searchPlaceholder = "Search records...",
+    rowClassName
 }: DataTableProps<T>) {
 
     const [sorting, setSorting] = useState<SortingState>([]);
@@ -128,7 +130,7 @@ export default function DataTable<T>({
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                         {table.getRowModel().rows.length > 0 ? table.getRowModel().rows.map(row => (
-                            <tr key={row.id} className="hover:bg-slate-50/50 transition-colors group">
+                            <tr key={row.id} className={`hover:bg-slate-50/50 transition-colors group ${rowClassName ? rowClassName(row.original) : ''}`}>
                                 {row.getVisibleCells().map(cell => (
                                     <td key={cell.id} className="px-6 py-4">
                                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
