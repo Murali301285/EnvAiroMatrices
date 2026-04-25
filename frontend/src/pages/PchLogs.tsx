@@ -181,7 +181,7 @@ export default function PchLogs() {
                             <Tooltip 
                                 contentStyle={{ borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 10px 25px -5px rgb(0 0 0 / 0.1)' }}
                                 labelStyle={{ fontWeight: 'bold', color: '#334155', marginBottom: '4px' }}
-                                formatter={(value: number, name: string, props: any) => [
+                                formatter={(value: any, _name: any, props: any) => [
                                     <span key="1" className={props.payload.isAlert ? "text-red-500 font-bold" : "text-emerald-500 font-bold"}>{value}</span>, 
                                     "Count"
                                 ]}
