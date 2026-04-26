@@ -15,8 +15,12 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config import BACKEND_DIR, DB_RETENTION_DAYS, LOG_RETENTION_DAYS
 from database import get_db_connection
+
+# Fallback/Hardcoded config to avoid import errors on Windows PM2 environments
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DB_RETENTION_DAYS = 2
+LOG_RETENTION_DAYS = 2
 
 
 def db_cleanup_job():
