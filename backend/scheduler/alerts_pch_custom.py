@@ -48,6 +48,8 @@ def evaluate_custom_pch_alerts():
                 threshold = int(whj.get("pch_threshold", 0))
                 cooldown_mins = int(whj.get("pch_cooldown_mins", 30))
                 
+                print(f"Checking dev: {dev['deviceid']} - timeframe: {timeframe_mins}, threshold: {threshold}")
+                
                 if timeframe_mins <= 0 or threshold <= 0:
                     continue
                 
@@ -75,7 +77,11 @@ def evaluate_custom_pch_alerts():
                     (dev_id, start_time, end_time)
                 )
                 row = cursor.fetchone()
+                print(f"Device: {dev_id}, start_time: {start_time}, end_time: {end_time}")
+                print(f"Row out: {row}")
+                
                 if not row or row["max_out"] is None or row["min_out"] is None:
+                    print("Skipping: No data or None data")
                     continue
                     
                 max_count = int(row["max_out"])
