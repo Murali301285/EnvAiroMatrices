@@ -58,37 +58,69 @@ def evaluate_custom_pch_alerts():
                 
                 # Calculate evaluation window
                 end_time = now
-                start_time = now - datetime.timedelta(minutes=timeframe_mins)
+                max_lookback = now - datetime.timedelta(minutes=timeframe_mins)
+                
+                # Fetch last alert time for this device
+                cursor.execute(
+                    "SELECT created_on FROM tbl_pch_alert WHERE deviceid=%s AND isAlertrequired=True ORDER BY slno DESC LIMIT 1",
+                    (dev_id,)
+                )
+                last_alert_row = cursor.fetchone()
+                
+                if last_alert_row and last_alert_row["created_on"]:
+                    start_time = max(last_alert_row["created_on"], max_lookback)
+                else:
+                    start_time = max_lookback
                 
                 # Midnight rule: clamp to today's midnight if it crosses
                 today_midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
                 if start_time < today_midnight:
                     start_time = today_midnight
 
-                # 2. Query tblMinuteDetails for OUT_RAW min/max
+                # 2. Query tblMinuteDetails minute-by-minute
                 cursor.execute(
                     """
                     SELECT 
-                        MAX(CAST(metrics->>'OUT_RAW' AS NUMERIC)) as max_out, 
-                        MIN(CAST(metrics->>'OUT_RAW' AS NUMERIC)) as min_out 
+                        (minute_date + minute_time) as dt, 
+                        CAST(metrics->>'OUT_RAW' AS NUMERIC) as out_raw 
                     FROM tblMinuteDetails 
                     WHERE deviceid = %s AND (minute_date + minute_time) >= %s AND (minute_date + minute_time) <= %s
+                    ORDER BY (minute_date + minute_time) ASC
                     """,
                     (dev_id, start_time, end_time)
                 )
-                row = cursor.fetchone()
-                print(f"Device: {dev_id}, start_time: {start_time}, end_time: {end_time}")
-                print(f"Row out: {row}")
+                records = cursor.fetchall()
                 
-                if not row or row["max_out"] is None or row["min_out"] is None:
-                    print("Skipping: No data or None data")
+                if not records:
+                    print(f"Skipping {dev_id}: No data in window {start_time} to {end_time}")
                     continue
                     
-                max_count = int(row["max_out"])
-                min_count = int(row["min_out"])
-                pch_count = max_count - min_count
+                min_out = None
+                max_out = None
+                breach_time = None
                 
-                if pch_count >= threshold:
+                for r in records:
+                    val = r["out_raw"]
+                    if val is None:
+                        continue
+                    val = int(val)
+                    
+                    if min_out is None or val < min_out:
+                        min_out = val
+                    if max_out is None or val > max_out:
+                        max_out = val
+                        
+                    pch_count = max_out - min_out
+                    if pch_count >= threshold:
+                        breach_time = r["dt"]
+                        break
+                
+                if min_out is None or max_out is None:
+                    continue
+                    
+                pch_count = max_out - min_out
+                
+                if breach_time:
                     # 3. Cooldown check
                     cooldown_start = now - datetime.timedelta(minutes=cooldown_mins)
                     cursor.execute(
@@ -99,61 +131,26 @@ def evaluate_custom_pch_alerts():
                     
                     if recent_alert:
                         # Inside cooldown
-                        remarks = f"already alert generated at previously [{recent_alert['created_on'].strftime('%Y-%m-%d %H:%M:%S')}, ID: {recent_alert['slno']}]"
+                        remarks = f"Threshold breached at {breach_time.strftime('%Y-%m-%d %H:%M:%S')} but inside cooldown (last alert: {recent_alert['created_on'].strftime('%Y-%m-%d %H:%M:%S')}, ID: {recent_alert['slno']})"
                         cursor.execute(
                             """
                             INSERT INTO tbl_pch_alert 
                             (deviceid, timeframe, from_datetime, to_datetime, Max_count, Min_count, PchCount, people_count_threshold_limit, isAlertrequired, isJsonCreated, isJSONposted, remarks)
                             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                             """,
-                            (dev_id, timeframe_mins, start_time, end_time, max_count, min_count, pch_count, threshold, True, False, False, remarks)
+                            (dev_id, timeframe_mins, start_time, breach_time, max_out, min_out, pch_count, threshold, True, False, False, remarks)
                         )
                     else:
                         # Outside cooldown, generate alert
                         remarks = "Alert Triggered"
                         
-                        # Generate JSON Payload
-                        cursor.execute(
-                            "SELECT s.post_url_live FROM tblScheduler s WHERE s.customer_code=%s LIMIT 1",
-                            (cust_code,)
-                        )
-                        s_row = cursor.fetchone()
-                        target_url = s_row["post_url_live"] if s_row else ""
-                        
-                        overrides = {
-                            "triggered_by": "threshold_breach",
-                            "alert_sequence": 1,
-                            "pcd_bad": 0,
-                            "pch_bad": 0,
-                            "parameters": "pch",
-                            "pch": {
-                                "value": pch_count,
-                                "unit": "",
-                                "pch_in": 0,
-                                "condition": "bad",
-                            },
-                        }
-                        payload = _parse_template(template, sp_name, dev_id, overrides)
-                        
-                        if target_url:
-                            _dispatch_webhook(dev_id, payload, cursor, "PCH Alert")
-                            is_posted = True
-                        else:
-                            is_posted = False
-                            
-                        cursor.execute(
-                            "INSERT INTO tblScheduledJsonHistory (deviceid, json_payload, payload_type) VALUES (%s, %s::jsonb, %s)",
-                            (dev_id, payload, "Alert"),
-                        )
-                        _write_alert_file(payload, dev_id, cursor, subfolder="Alert", suffix="Alert_Pch")
-                        
                         cursor.execute(
                             """
                             INSERT INTO tbl_pch_alert 
                             (deviceid, timeframe, from_datetime, to_datetime, Max_count, Min_count, PchCount, people_count_threshold_limit, isAlertrequired, isJsonCreated, isJSONposted, remarks)
                             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                             """,
-                            (dev_id, timeframe_mins, start_time, end_time, max_count, min_count, pch_count, threshold, True, True, is_posted, remarks)
+                            (dev_id, timeframe_mins, start_time, end_time, max_out, min_out, pch_count, threshold, True, False, False, remarks)
                         )
                 else:
                     # Log evaluation even if threshold is not met
@@ -164,7 +161,7 @@ def evaluate_custom_pch_alerts():
                         (deviceid, timeframe, from_datetime, to_datetime, Max_count, Min_count, PchCount, people_count_threshold_limit, isAlertrequired, isJsonCreated, isJSONposted, remarks)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
-                        (dev_id, timeframe_mins, start_time, end_time, max_count, min_count, pch_count, threshold, False, False, False, remarks)
+                        (dev_id, timeframe_mins, start_time, end_time, max_out, min_out, pch_count, threshold, False, False, False, remarks)
                     )
                         
             conn.commit()
