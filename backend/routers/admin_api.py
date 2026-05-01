@@ -401,8 +401,65 @@ async def update_entity(entity: str, slno: int, request: Request):
         conds = json.dumps(p.get('status_conditions', []))
         return execute_query("UPDATE tblParameterMaster SET parameterName=%s, param_tag=%s, labelName=%s, color=%s, unit=%s, conversionFactor=%s, valueFactor=%s, inputField=%s, status=%s, datatype=%s, decimalplaces=%s, status_conditions=%s WHERE slno=%s", (p.get('parameterName'), p.get('param_tag'), p.get('labelName'), p.get('color'), p.get('unit'), p.get('conversionFactor'), p.get('valueFactor', 'Avg'), p.get('inputField'), p.get('status', 1), p.get('datatype', 'Decimal'), p.get('decimalplaces'), conds, slno), False)
     elif entity == "devices":
-        whj = json.dumps(p.get('working_hours_json', {}))
-        return execute_query("UPDATE tblDeviceMaster SET customer_code=%s, deviceid=%s, alias=%s, location=%s, address=%s, working_hours_json=%s, active=%s, remarks=%s, create_json_file=%s, post_data=%s WHERE slno=%s", (p.get('customer_code'), p.get('deviceid'), p.get('alias'), p.get('location'), p.get('address'), whj, p.get('active', 1), p.get('remarks'), p.get('create_json_file', False), p.get('post_data', False), slno), False)
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT * FROM tblDeviceMaster WHERE slno=%s", (slno,))
+                row = cursor.fetchone()
+                if not row:
+                    return {"status": "error", "message": "Device not found"}
+                
+                location = p.get('location')
+                if location is None or str(location).strip() == "":
+                    location = row['location']
+                    
+                address = p.get('address')
+                if address is None or str(address).strip() == "":
+                    address = row['address']
+                    
+                existing_whj = row['working_hours_json']
+                if not existing_whj:
+                    existing_whj = {}
+                elif isinstance(existing_whj, str):
+                    try:
+                        existing_whj = json.loads(existing_whj)
+                    except:
+                        existing_whj = {}
+                        
+                incoming_whj = p.get('working_hours_json', {})
+                if incoming_whj:
+                    for k, v in incoming_whj.items():
+                        # Only update if the incoming value is actually present
+                        if v is not None and str(v).strip() != "" and str(v) != "0":
+                            existing_whj[k] = v
+                            
+                whj_str = json.dumps(existing_whj)
+                
+                cursor.execute(
+                    "UPDATE tblDeviceMaster SET customer_code=%s, deviceid=%s, alias=%s, location=%s, address=%s, working_hours_json=%s, active=%s, remarks=%s, create_json_file=%s, post_data=%s WHERE slno=%s", 
+                    (
+                        p.get('customer_code', row['customer_code']), 
+                        p.get('deviceid', row['deviceid']), 
+                        p.get('alias', row['alias']), 
+                        location, 
+                        address, 
+                        whj_str, 
+                        p.get('active', row['active']), 
+                        p.get('remarks', row['remarks']), 
+                        p.get('create_json_file', row.get('create_json_file')), 
+                        p.get('post_data', row.get('post_data')), 
+                        slno
+                    )
+                )
+                conn.commit()
+            return {"status": "success", "data": None}
+        except Exception as e:
+            if conn: conn.rollback()
+            import traceback
+            err_details = f"Error: {str(e)}\nTraceback: {traceback.format_exc()}"
+            return {"status": "error", "message": "Comprehensive Error during Device Update", "details": err_details}
+        finally:
+            if conn: conn.close()
     elif entity == "formatters":
         return execute_query("UPDATE tblJsonFormatter SET name=%s, jsonTemplate=%s, storedProcedureName=%s, type=%s WHERE slno=%s", (p.get('name'), p.get('jsonTemplate'), p.get('storedProcedureName'), p.get('type'), slno), False)
     elif entity == "pages":

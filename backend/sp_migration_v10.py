@@ -54,7 +54,7 @@ def migrate():
                 startdtime VARCHAR,
                 triggered_by VARCHAR,
                 parameters VARCHAR,
-                hours BOOLEAN,
+                hours VARCHAR,
                 alert_sequence INTEGER,
                 tvoc_value NUMERIC,
                 tvoc_unit VARCHAR,
@@ -99,9 +99,7 @@ def migrate():
                         COALESCE(c.customerName, '') AS client,
                         d.deviceid,
                         d.alias,
-                        d.location,
-                        (d.working_hours_json->>'start')::TIME AS start_time,
-                        (d.working_hours_json->>'end')::TIME AS end_time
+                        d.location
                     FROM tblDeviceMaster d
                     LEFT JOIN tblCustomerMaster c ON d.customer_code = c.customer_code
                     WHERE d.deviceid = p_deviceid
@@ -135,6 +133,11 @@ def migrate():
                     WHERE tblminutedetails.deviceid = p_deviceid 
                       AND created_at >= v_window_start 
                       AND created_at <= v_current_time
+                ),
+                hourly_pcd AS (
+                    SELECT 
+                        COALESCE((SELECT (metrics->>'IN_RAW')::NUMERIC FROM tblminutedetails WHERE tblminutedetails.deviceid = p_deviceid AND created_at >= v_window_start AND created_at <= v_current_time ORDER BY created_at ASC LIMIT 1), 0) AS hour_start_in,
+                        COALESCE((SELECT (metrics->>'IN_RAW')::NUMERIC FROM tblminutedetails WHERE tblminutedetails.deviceid = p_deviceid AND created_at >= v_window_start AND created_at <= v_current_time ORDER BY created_at DESC LIMIT 1), 0) AS hour_current_in
                 ),
                 daily_pcd AS (
                     SELECT 
@@ -188,15 +191,7 @@ def migrate():
                     to_char(v_window_start, 'YYYY-MM-DD HH24:MI:SS')::VARCHAR AS startdtime,
                     'scheduled'::VARCHAR AS triggered_by,
                     'tvoc,pcd,pch'::VARCHAR AS parameters,
-                    COALESCE(
-                        CASE 
-                            WHEN di.start_time <= di.end_time THEN 
-                                v_latest_timestamp::time >= di.start_time AND v_latest_timestamp::time <= di.end_time
-                            ELSE 
-                                v_latest_timestamp::time >= di.start_time OR v_latest_timestamp::time <= di.end_time
-                        END, 
-                        false
-                    )::BOOLEAN AS hours,
+                    'yes'::VARCHAR AS hours,
                     0::INTEGER AS alert_sequence,
                     
                     COALESCE(lm.tvoc_val, 0)::NUMERIC AS tvoc_value,
@@ -212,9 +207,10 @@ def migrate():
                     da.pcd_max::NUMERIC,
                     'NA'::VARCHAR AS pcd_bad,
                     
-                    COALESCE(lm.pch_val, 0)::NUMERIC AS pch,
-                    ha.pch_Avg::NUMERIC,
-                    ha.pch_max::NUMERIC,
+                    COALESCE(lm.pch_val, 0)::NUMERIC AS original_pch,
+                    CASE WHEN GREATEST(0, lm.pch_val) != GREATEST(0, hp.hour_current_in - hp.hour_start_in) THEN GREATEST(0, hp.hour_current_in - hp.hour_start_in) ELSE GREATEST(0, lm.pch_val) END::NUMERIC AS pch,
+                    CASE WHEN GREATEST(0, lm.pch_val) != GREATEST(0, hp.hour_current_in - hp.hour_start_in) THEN GREATEST(0, hp.hour_current_in - hp.hour_start_in) ELSE GREATEST(0, lm.pch_val) END::NUMERIC AS pch_Avg,
+                    CASE WHEN GREATEST(0, lm.pch_val) != GREATEST(0, hp.hour_current_in - hp.hour_start_in) THEN GREATEST(0, hp.hour_current_in - hp.hour_start_in) ELSE GREATEST(0, lm.pch_val) END::NUMERIC AS pch_max,
                     'NA'::VARCHAR AS pch_bad,
                     
                     to_char(v_latest_timestamp, 'HH24')::VARCHAR AS "time",
@@ -226,6 +222,7 @@ def migrate():
                 CROSS JOIN tvoc_metadata tm
                 CROSS JOIN latest_metrics lm
                 CROSS JOIN hourly_aggregations ha
+                CROSS JOIN hourly_pcd hp
                 CROSS JOIN daily_aggregations da
                 CROSS JOIN continuous_tvoc_bad ctb;
             END;

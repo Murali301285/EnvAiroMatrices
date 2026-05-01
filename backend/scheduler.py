@@ -16,7 +16,7 @@ def _get_alias(dev_id, cursor):
     row = cursor.fetchone()
     return row['alias'] if row and row.get('alias') else dev_id
 
-def _parse_template(template_str, sp_name, deviceid, overrides=None):
+def _parse_template(template_str, sp_name, deviceid, overrides=None, ref_time=None):
     try:
         # 1. Fetch live mapping data natively from Stored Procedure logic bounds
         from database import get_db_connection
@@ -24,7 +24,11 @@ def _parse_template(template_str, sp_name, deviceid, overrides=None):
         db_context = {}
         try:
             with conn.cursor() as cursor:
-                cursor.execute(f"SELECT * FROM {sp_name}(%s)", (deviceid,))
+                # Pass ref_time if provided for accurate historical snapshots
+                if ref_time:
+                    cursor.execute(f"SELECT * FROM {sp_name}(%s, %s)", (deviceid, ref_time))
+                else:
+                    cursor.execute(f"SELECT * FROM {sp_name}(%s)", (deviceid,))
                 result = cursor.fetchone()
                 if result: 
                     db_context = dict(result)
@@ -174,6 +178,7 @@ def orchestrate_json_payloads():
             for row in unprocessed:
                 slno = row['slno']
                 dev_id = row['deviceid']
+                rec_on = row.get('receivedon') or row.get('receivedOn')
                 processed_slnos.append(slno)
                 
                 # If we've already transmitted & built this payload in this cycle, silently mark block processed to exhaust the queue safely
@@ -204,8 +209,23 @@ def orchestrate_json_payloads():
                     create_json_file = formatter.get('create_json_file')
                     
                     if sp_name:
-                        # Simulated parsing #Tags (static text overrides) and $Tags (SP results)
-                        result_payload = _parse_template(template, sp_name, dev_id)
+                        # PASS 1: Check if we ALREADY sent a scheduled JSON for this 15-minute bucket
+                        # Refined Windowing: 11:14, 11:29, 11:44, 11:59
+                        bucket_minute = (rec_on.minute // 15) * 15
+                        bucket_anchor = rec_on.replace(minute=bucket_minute, second=0, microsecond=0)
+                        
+                        cursor.execute("""
+                            SELECT slno FROM tblScheduledJsonHistory 
+                            WHERE deviceid=%s AND payload_type='Scheduled' 
+                              AND created_at >= %s AND created_at < %s + INTERVAL '15 minutes'
+                        """, (dev_id, bucket_anchor, bucket_anchor))
+                        
+                        if cursor.fetchone():
+                            # Already sent for this cycle. Mark processed and skip!
+                            continue
+
+                        # Pass rec_on for historical accuracy in PCH cycles
+                        result_payload = _parse_template(template, sp_name, dev_id, None, rec_on)
                         
                         # Write JSON Locally as Requested
                         if create_json_file and folder_name and folder_name.strip():
@@ -225,25 +245,39 @@ def orchestrate_json_payloads():
 
                         # Push to Scheduled JSON Track Record
                         payload_type = formatter.get('payload_type') or 'Scheduled'
-                        cursor.execute("INSERT INTO tblScheduledJsonHistory (deviceid, json_payload, payload_type) VALUES (%s, %s::jsonb, %s)", 
-                                      (dev_id, result_payload, payload_type))
-                                      
-                        # Route payload natively through dynamic environment dispatch
-                        _dispatch_webhook(dev_id, result_payload, cursor, payload_type)
-                                      
-                        # Document execution time internally
-                        schedule_id = formatter.get('schedule_id')
-                        if schedule_id:
-                            cursor.execute("UPDATE tblScheduler SET last_run = NOW() WHERE slno=%s", (schedule_id,))
+                        try:
+                            # Database Unique constraint catches duplicates here as absolute fail-safe
+                            cursor.execute("INSERT INTO tblScheduledJsonHistory (deviceid, json_payload, payload_type) VALUES (%s, %s::jsonb, %s)", 
+                                        (dev_id, result_payload, payload_type))
+                            
+                            # Route payload natively through dynamic environment dispatch
+                            _dispatch_webhook(dev_id, result_payload, cursor, payload_type)
+                            
+                            # Document execution time internally
+                            schedule_id = formatter.get('schedule_id')
+                            if schedule_id:
+                                cursor.execute("UPDATE tblScheduler SET last_run = NOW() WHERE slno=%s", (schedule_id,))
+                        except Exception as db_err:
+                            if "idx_unique_scheduled_payload" in str(db_err):
+                                pass # Silently ignore index violation due to parallel trigger attempt
+                            else:
+                                print(f"DB Insert Error: {db_err}")
                                       
                 orchestrated_devices.add(dev_id)
                 
             # Batch update ALL the processed rows natively at the end of the generator loop once
             if processed_slnos:
                 cursor.execute("UPDATE tblDatareceiver SET isProcessed=1, processedOn=NOW() WHERE slno = ANY(%s)", (processed_slnos,))
+                
+            cursor.execute("SELECT pg_advisory_unlock(8381)")
             conn.commit()
     except Exception as e:
         print(f"Orchestration Error: {e}")
+        try:
+            cursor.execute("SELECT pg_advisory_unlock(8381)")
+            conn.commit()
+        except:
+            pass
     finally:
         if conn:
             conn.close()
