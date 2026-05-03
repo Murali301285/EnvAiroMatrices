@@ -279,23 +279,29 @@ def _dispatch_webhook(device_id, payload_str, cursor, payload_type="Scheduled"):
             status_text = str(response.status_code)
             full_response_text = response.text
         except Exception as e:
-            status_text = f"Error: {str(e)[:50]}"
+            status_text = f"Err: {str(e)[:40]}"
             full_response_text = str(e)
 
-        cursor.execute(
-            """
-            INSERT INTO tblPostHistory (deviceid, payload, targeturl, responsestatus, env_type, createddate, remarks, payload_type)
-            VALUES (%s, %s::jsonb, %s, %s, %s, NOW(), %s, %s)
-            """,
-            (
-                device_id,
-                payload_str,
-                target_url,
-                status_text,
-                env_type,
-                full_response_text,
-                payload_type,
-            ),
-        )
+        try:
+            cursor.execute("SAVEPOINT hook_sp")
+            cursor.execute(
+                """
+                INSERT INTO tblPostHistory (deviceid, payload, targeturl, responsestatus, env_type, createddate, remarks, payload_type)
+                VALUES (%s, %s::jsonb, %s, %s, %s, NOW(), %s, %s)
+                """,
+                (
+                    device_id,
+                    payload_str,
+                    target_url,
+                    status_text,
+                    env_type,
+                    full_response_text,
+                    payload_type,
+                ),
+            )
+            cursor.execute("RELEASE SAVEPOINT hook_sp")
+        except Exception as insert_hook_err:
+            cursor.execute("ROLLBACK TO SAVEPOINT hook_sp")
+            print(f"Hook History Insert Error: {insert_hook_err}")
     except Exception as hook_err:
         print(f"Webhook Dispatch Error: {hook_err}")

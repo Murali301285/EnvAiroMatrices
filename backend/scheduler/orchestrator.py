@@ -82,27 +82,27 @@ def orchestrate_json_payloads():
                     create_json_file = formatter.get("create_json_file")
 
                     if sp_name:
-                        # Dedup: has this 15-minute bucket already been transmitted?
-                        bucket_minute = (rec_on.minute // 15) * 15
-                        bucket_anchor = rec_on.replace(
-                            minute=bucket_minute, second=0, microsecond=0
-                        )
-
-                        cursor.execute(
-                            """
-                            SELECT slno FROM tblScheduledJsonHistory
-                            WHERE deviceid=%s AND payload_type='Scheduled'
-                              AND created_at >= %s AND created_at < %s + INTERVAL '15 minutes'
-                            """,
-                            (dev_id, bucket_anchor, bucket_anchor),
-                        )
-
-                        if cursor.fetchone():
-                            continue  # already sent for this bucket
-
                         result_payload = _parse_template(
                             template, sp_name, dev_id, None, rec_on
                         )
+
+                        import json
+                        try:
+                            payload_dict = json.loads(result_payload)
+                            ist_dt = payload_dict.get("ist_datetime")
+                            if ist_dt:
+                                cursor.execute(
+                                    """
+                                    SELECT slno FROM tblScheduledJsonHistory
+                                    WHERE deviceid=%s AND payload_type='Scheduled'
+                                      AND json_payload->>'ist_datetime' = %s
+                                    """,
+                                    (dev_id, ist_dt)
+                                )
+                                if cursor.fetchone():
+                                    continue  # already sent for this bucket
+                        except Exception as parse_err:
+                            print(f"JSON Parse Error for dedup: {parse_err}")
 
                         # Optional local file sink
                         if create_json_file and folder_name and folder_name.strip():
@@ -130,11 +130,18 @@ def orchestrate_json_payloads():
                                 print(f"Local Store ERROR: {file_err}")
 
                         payload_type = formatter.get("payload_type") or "Scheduled"
-                        cursor.execute(
-                            "INSERT INTO tblScheduledJsonHistory (deviceid, json_payload, payload_type) "
-                            "VALUES (%s, %s::jsonb, %s)",
-                            (dev_id, result_payload, payload_type),
-                        )
+                        try:
+                            cursor.execute("SAVEPOINT insert_sp")
+                            cursor.execute(
+                                "INSERT INTO tblScheduledJsonHistory (deviceid, json_payload, payload_type) "
+                                "VALUES (%s, %s::jsonb, %s)",
+                                (dev_id, result_payload, payload_type),
+                            )
+                            cursor.execute("RELEASE SAVEPOINT insert_sp")
+                        except Exception as insert_err:
+                            cursor.execute("ROLLBACK TO SAVEPOINT insert_sp")
+                            print(f"History Insert Error (Likely Duplicate): {insert_err}")
+                            continue
 
                         _dispatch_webhook(dev_id, result_payload, cursor, payload_type)
 
