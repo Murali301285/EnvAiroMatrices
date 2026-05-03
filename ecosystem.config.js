@@ -3,7 +3,7 @@ module.exports = {
     {
       name: "envmat-backend",
       cwd: "./backend",
-      script: "./venv/Scripts/pythonw.exe",
+      script: "./venv/Scripts/python.exe",
       args: "main.py",
       instances: 1,
       autorestart: true,

@@ -38,7 +38,7 @@ def orchestrate_json_payloads():
             if not unprocessed:
                 return
 
-            orchestrated_devices = set()
+            orchestrated_buckets = set()
             processed_slnos = []
 
             for row in unprocessed:
@@ -47,8 +47,14 @@ def orchestrate_json_payloads():
                 rec_on = row.get("receivedon") or row.get("receivedOn")
                 processed_slnos.append(slno)
 
-                # Already transmitted for this device in this cycle — drain silently
-                if dev_id in orchestrated_devices:
+                if not rec_on:
+                    continue
+
+                bucket_minute = (rec_on.minute // 15) * 15
+                bucket_key = (dev_id, rec_on.date(), rec_on.hour, bucket_minute)
+
+                # Already transmitted for this bucket in this cycle — drain silently
+                if bucket_key in orchestrated_buckets:
                     continue
 
                 cursor.execute(
@@ -152,7 +158,7 @@ def orchestrate_json_payloads():
                                 (schedule_id,),
                             )
 
-                orchestrated_devices.add(dev_id)
+                orchestrated_buckets.add(bucket_key)
 
             if processed_slnos:
                 cursor.execute(
