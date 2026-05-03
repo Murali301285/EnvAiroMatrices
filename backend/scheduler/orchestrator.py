@@ -19,13 +19,16 @@ ADVISORY_LOCK_KEY = 8381
 
 def orchestrate_json_payloads():
     """Evaluate #Tags and $Tags logic for the current 15-minute bucket."""
+    print("Orchestrator cron job triggered at", datetime.datetime.now())
     conn = get_db_connection()
     lock_acquired = False
     try:
         with conn.cursor() as cursor:
             # ACQUIRE ADVISORY LOCK — prevents parallel runs across workers
             cursor.execute("SELECT pg_try_advisory_lock(%s)", (ADVISORY_LOCK_KEY,))
-            lock_acquired = bool(cursor.fetchone()[0])
+            row = cursor.fetchone()
+            lock_acquired = bool(list(row.values())[0]) if row else False
+            print("Orchestrator Lock acquired:", lock_acquired)
             if not lock_acquired:
                 return  # Another worker is already handling this cycle
 
