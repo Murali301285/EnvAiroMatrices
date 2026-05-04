@@ -20,7 +20,13 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database import get_db_connection
 
-from config import WOLOO_API_KEY
+import os
+from dotenv import load_dotenv
+
+_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(_BACKEND_DIR, ".env"))
+
+WOLOO_API_KEY = os.getenv("WOLOO_API_KEY", "")
 
 # Hard cap for the TVOC family (VOC + SH2S derived). Spec: never emit > 15 ppm.
 TVOC_MAX_PPM = 15.0
