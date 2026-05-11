@@ -34,7 +34,7 @@ def evaluate_custom_pch_alerts():
             template = formatter.get("jsontemplate") or formatter.get("jsonTemplate")
             sp_name = formatter.get("storedprocedurename") or formatter.get("storedProcedureName")
 
-            now = datetime.datetime.now()
+            now = datetime.datetime.now().replace(second=0, microsecond=0)
 
             for dev in devices:
                 whj = dev.get("working_hours_json") or {}
