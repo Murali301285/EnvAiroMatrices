@@ -56,9 +56,12 @@ def evaluate_custom_pch_alerts():
                 dev_id = dev["deviceid"]
                 cust_code = dev["customer_code"]
                 
-                # Calculate evaluation window
-                end_time = now
-                max_lookback = now - datetime.timedelta(minutes=timeframe_mins)
+                # Apply 1-minute execution buffer (so script running at :15 evaluates up to :14)
+                logical_now = datetime.datetime.now().replace(second=0, microsecond=0) - datetime.timedelta(minutes=1)
+                
+                end_time = logical_now
+                # To make it perfectly inclusive (e.g. 15:15 to 16:14 = 60 mins), subtract timeframe - 1
+                max_lookback = logical_now - datetime.timedelta(minutes=timeframe_mins - 1)
                 
                 # Fetch last alert time for this device
                 cursor.execute(
