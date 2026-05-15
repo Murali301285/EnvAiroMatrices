@@ -191,9 +191,9 @@ def dispatch_tvoc_alerts_job():
                             "condition": "bad",
                         },
                     }
-                    payload = _parse_template(template, sp_name, dev_id, overrides)
+                    payload, diagnostics = _parse_template(template, sp_name, dev_id, overrides)
                     if target_url:
-                        _dispatch_webhook(dev_id, payload, cursor, "Tvoc Alert")
+                        _dispatch_webhook(dev_id, payload, cursor, "Tvoc Alert", diagnostics)
                     cursor.execute(
                         "INSERT INTO tblScheduledJsonHistory (deviceid, json_payload, payload_type) VALUES (%s, %s::jsonb, %s)",
                         (dev_id, payload, "Alert"),
@@ -245,9 +245,9 @@ def dispatch_tvoc_alerts_job():
                         "condition": "good",
                     },
                 }
-                payload = _parse_template(template, sp_name, dev_id, overrides)
+                payload, diagnostics = _parse_template(template, sp_name, dev_id, overrides)
                 if target_url:
-                    _dispatch_webhook(dev_id, payload, cursor, "TVOC Resolved")
+                    _dispatch_webhook(dev_id, payload, cursor, "TVOC Resolved", diagnostics)
                 cursor.execute(
                     "INSERT INTO tblScheduledJsonHistory (deviceid, json_payload, payload_type) VALUES (%s, %s::jsonb, %s)",
                     (dev_id, payload, "Resolved"),

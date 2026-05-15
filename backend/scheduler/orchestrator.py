@@ -91,7 +91,7 @@ def orchestrate_json_payloads():
                     create_json_file = formatter.get("create_json_file")
 
                     if sp_name:
-                        result_payload = _parse_template(
+                        result_payload, diagnostics = _parse_template(
                             template, sp_name, dev_id, None, rec_on
                         )
 
@@ -152,7 +152,7 @@ def orchestrate_json_payloads():
                             print(f"History Insert Error (Likely Duplicate): {insert_err}")
                             continue
 
-                        _dispatch_webhook(dev_id, result_payload, cursor, payload_type)
+                        _dispatch_webhook(dev_id, result_payload, cursor, payload_type, diagnostics)
 
                         schedule_id = formatter.get("schedule_id")
                         if schedule_id:

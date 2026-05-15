@@ -23,6 +23,7 @@ import Login from './pages/Login';
 import ApiLogs from './pages/ApiLogs';
 import ApiMonitor from './pages/ApiMonitor';
 import PchLogs from './pages/PchLogs';
+import JsonMonitor from './pages/JsonMonitor';
 
 export default function App() {
   const [dbStatus, setDbStatus] = useState<string>("Disconnected");
@@ -73,6 +74,7 @@ export default function App() {
           <Route path="/api-logs" element={<ApiLogs />} />
           <Route path="/api-monitor" element={<ApiMonitor />} />
           <Route path="/pch-logs" element={<PchLogs />} />
+          <Route path="/json-monitor" element={<JsonMonitor />} />
         </Route>
       </Routes>
     </BrowserRouter>

@@ -72,8 +72,18 @@ def _parse_template(template_str, sp_name, deviceid, overrides=None, ref_time=No
                             except Exception:
                                 pass
 
+                        if isinstance(v, (datetime.datetime, datetime.date, datetime.time)):
+                            db_context[k] = v.isoformat()
+                            v = db_context[k]
+
+                        if isinstance(v, decimal.Decimal):
+                            v = int(v) if v % 1 == 0 else float(v)
+                            db_context[k] = v
+
                         if isinstance(v, dict):
                             for sub_k, sub_v in v.items():
+                                if isinstance(sub_v, decimal.Decimal):
+                                    sub_v = int(sub_v) if sub_v % 1 == 0 else float(sub_v)
                                 db_context[sub_k] = sub_v
 
                 cursor.execute(
@@ -234,13 +244,13 @@ def _parse_template(template_str, sp_name, deviceid, overrides=None, ref_time=No
             final_json_string,
         )
 
-        return final_json_string
+        return final_json_string, db_context
     except Exception as e:
         print(f"Template parsing failed: {e}")
-        return template_str
+        return template_str, {}
 
 
-def _dispatch_webhook(device_id, payload_str, cursor, payload_type="Scheduled"):
+def _dispatch_webhook(device_id, payload_str, cursor, payload_type="Scheduled", diagnostics=None):
     """POST a payload to the device's Live or Staging URL and log the response."""
     try:
         cursor.execute(
@@ -291,8 +301,8 @@ def _dispatch_webhook(device_id, payload_str, cursor, payload_type="Scheduled"):
             cursor.execute("SAVEPOINT hook_sp")
             cursor.execute(
                 """
-                INSERT INTO tblPostHistory (deviceid, payload, targeturl, responsestatus, env_type, createddate, remarks, payload_type)
-                VALUES (%s, %s::jsonb, %s, %s, %s, NOW(), %s, %s)
+                INSERT INTO tblPostHistory (deviceid, payload, targeturl, responsestatus, env_type, createddate, remarks, payload_type, diagnostics)
+                VALUES (%s, %s::jsonb, %s, %s, %s, NOW(), %s, %s, %s::jsonb)
                 """,
                 (
                     device_id,
@@ -302,6 +312,7 @@ def _dispatch_webhook(device_id, payload_str, cursor, payload_type="Scheduled"):
                     env_type,
                     full_response_text,
                     payload_type,
+                    json.dumps(diagnostics) if diagnostics is not None else None
                 ),
             )
             cursor.execute("RELEASE SAVEPOINT hook_sp")

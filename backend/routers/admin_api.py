@@ -140,7 +140,7 @@ def get_api_dispatch(from_date: str = None, to_date: str = None):
     query = """
         SELECT p.slno, dm.alias as device_alias, p.deviceid, p.env_type, p.payload_type, p.targeturl, p.responsestatus, p.remarks,
                TO_CHAR(p.createddate, 'YYYY-MM-DD HH24:MI:SS') as postedon,
-               p.payload
+               p.payload, p.diagnostics
         FROM tblPostHistory p
         LEFT JOIN tblDeviceMaster dm ON p.deviceid = dm.deviceid
         WHERE p.isdeleted=0 OR p.isdeleted IS NULL
@@ -593,4 +593,29 @@ def get_pch_logs(limit: int = 100, from_date: str = None, to_date: str = None):
     query += " ORDER BY slno DESC LIMIT %s"
     params.append(limit)
     
+    return execute_query(query, tuple(params))
+
+# ----- JSON MONITOR -----
+@router.get("/json-monitor")
+def get_json_monitor(from_date: str = None, to_date: str = None, deviceid: str = None):
+    query = """
+        SELECT p.slno, p.deviceid, dm.alias as device_alias,
+               TO_CHAR(p.createddate, 'YYYY-MM-DD HH24:MI:SS') as createdon,
+               p.payload, p.diagnostics
+        FROM tblPostHistory p
+        LEFT JOIN tblDeviceMaster dm ON p.deviceid = dm.deviceid
+        WHERE p.payload_type = 'Scheduled'
+    """
+    params = []
+    if from_date:
+        query += " AND DATE(p.createddate) >= %s"
+        params.append(from_date)
+    if to_date:
+        query += " AND DATE(p.createddate) <= %s"
+        params.append(to_date)
+    if deviceid:
+        query += " AND p.deviceid = %s"
+        params.append(deviceid)
+        
+    query += " ORDER BY p.slno DESC LIMIT 200"
     return execute_query(query, tuple(params))

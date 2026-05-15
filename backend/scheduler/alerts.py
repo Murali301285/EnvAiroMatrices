@@ -157,8 +157,8 @@ def evaluate_active_alerts():
                         list(out_sequences.values()) + [0]
                     )
 
-                    payload = _parse_template(template, sp_name, dev_id, overrides)
-                    _dispatch_webhook(dev_id, payload, cursor, "Alert")
+                    payload, diagnostics = _parse_template(template, sp_name, dev_id, overrides)
+                    _dispatch_webhook(dev_id, payload, cursor, "Alert", diagnostics)
 
             conn.commit()
     except Exception as e:

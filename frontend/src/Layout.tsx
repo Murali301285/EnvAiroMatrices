@@ -97,6 +97,7 @@ export default function Layout({ }: { wsStatus?: string }) {
                 { name: 'Alert Monitor', path: '/alerts', icon: <Activity size={18} /> },
                 { name: 'PCH Logs', path: '/pch-logs', icon: <Activity size={18} /> },
                 { name: 'API Post Monitor', path: '/api-monitor', icon: <Globe size={18} /> },
+                { name: 'JSON Monitor', path: '/json-monitor', icon: <FileJson size={18} /> },
                 { name: 'API Access Logs', path: '/api-logs', icon: <Code size={18} /> },
                 { name: 'Error', path: '/error', icon: <AlertTriangle size={18} /> },
                 { name: 'Events', path: '/events', icon: <Radio size={18} /> },

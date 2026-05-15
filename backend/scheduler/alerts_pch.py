@@ -129,12 +129,12 @@ def evaluate_pch_bucket_stream():
                                                 "condition": "bad",
                                             },
                                         }
-                                        payload = _parse_template(
+                                        payload, diagnostics = _parse_template(
                                             template, sp_name, _dev_id, overrides
                                         )
                                         if target_url:
                                             _dispatch_webhook(
-                                                _dev_id, payload, cursor, "PCH Alert"
+                                                _dev_id, payload, cursor, "PCH Alert", diagnostics
                                             )
                                         cursor.execute(
                                             "INSERT INTO tblScheduledJsonHistory (deviceid, json_payload, payload_type) VALUES (%s, %s::jsonb, %s)",
@@ -271,9 +271,9 @@ def dispatch_pch_alerts_job():
                                 "condition": "bad",
                             },
                         }
-                        payload = _parse_template(template, sp_name, dev_id, overrides)
+                        payload, diagnostics = _parse_template(template, sp_name, dev_id, overrides)
                         if target_url:
-                            _dispatch_webhook(dev_id, payload, cursor, "PCH Alert")
+                            _dispatch_webhook(dev_id, payload, cursor, "PCH Alert", diagnostics)
                         cursor.execute(
                             "INSERT INTO tblScheduledJsonHistory (deviceid, json_payload, payload_type) VALUES (%s, %s::jsonb, %s)",
                             (dev_id, payload, "Alert"),
@@ -303,9 +303,9 @@ def dispatch_pch_alerts_job():
                                 "condition": "good",
                             },
                         }
-                        payload = _parse_template(template, sp_name, dev_id, overrides)
+                        payload, diagnostics = _parse_template(template, sp_name, dev_id, overrides)
                         if target_url:
-                            _dispatch_webhook(dev_id, payload, cursor, "PCH Resolved")
+                            _dispatch_webhook(dev_id, payload, cursor, "PCH Resolved", diagnostics)
                         cursor.execute(
                             "INSERT INTO tblScheduledJsonHistory (deviceid, json_payload, payload_type) VALUES (%s, %s::jsonb, %s)",
                             (dev_id, payload, "Resolved"),
@@ -336,9 +336,9 @@ def dispatch_pch_alerts_job():
                         "parameters": "pch",
                         "pch": {"value": 0, "unit": "", "pch_in": 0, "condition": "good"},
                     }
-                    payload = _parse_template(template, sp_name, dev_id, overrides)
+                    payload, diagnostics = _parse_template(template, sp_name, dev_id, overrides)
                     if target_url:
-                        _dispatch_webhook(dev_id, payload, cursor, "PCH Resolved")
+                        _dispatch_webhook(dev_id, payload, cursor, "PCH Resolved", diagnostics)
                     cursor.execute(
                         "INSERT INTO tblScheduledJsonHistory (deviceid, json_payload, payload_type) VALUES (%s, %s::jsonb, %s)",
                         (dev_id, payload, "Resolved"),
