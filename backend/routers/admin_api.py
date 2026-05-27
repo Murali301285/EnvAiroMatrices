@@ -29,13 +29,126 @@ async def authenticate_user(request: Request):
                 
                 if is_valid:
                     del row['password'] # Remove hash from frontend payload
-                    return {"status": "success", "data": dict(row)}
+                    
+                    # Fetch permissions from tbl_user_roles dynamically
+                    userrole = row.get('userrole') or ''
+                    role_str = userrole.strip()
+                    
+                    # Normalization mappings for direct matches
+                    role_mapping = {
+                        'admin': 'System Admin',
+                        'user': 'Guest Operator',
+                        'operator': 'Guest Operator'
+                    }
+                    target_role = role_mapping.get(role_str.lower(), role_str)
+                    
+                    mobile_perms = []
+                    
+                    # Try direct match
+                    cursor.execute("SELECT mobile_permissions FROM tbl_user_roles WHERE LOWER(role_name) = LOWER(%s) AND is_deleted = 0", (target_role,))
+                    perm_row = cursor.fetchone()
+                    if perm_row:
+                        mobile_perms = perm_row['mobile_permissions'] or []
+                    else:
+                        # Try matching original role_str directly
+                        cursor.execute("SELECT mobile_permissions FROM tbl_user_roles WHERE LOWER(role_name) = LOWER(%s) AND is_deleted = 0", (role_str,))
+                        perm_row = cursor.fetchone()
+                        if perm_row:
+                            mobile_perms = perm_row['mobile_permissions'] or []
+                        else:
+                            # Fuzzy matching fallback
+                            cursor.execute("SELECT role_name, mobile_permissions FROM tbl_user_roles WHERE is_deleted = 0")
+                            all_roles = cursor.fetchall()
+                            for r in all_roles:
+                                if role_str.lower() in r['role_name'].lower() or r['role_name'].lower() in role_str.lower():
+                                    mobile_perms = r['mobile_permissions'] or []
+                                    break
+                                    
+                    # SECURITY CHECK: If permissions are empty or Main view is not granted, block access!
+                    if not mobile_perms or 'Main' not in mobile_perms:
+                        return {"status": "error", "message": "Access denied. Contact Admin."}
+                        
+                    # Append mobile_permissions to the user payload
+                    user_data = dict(row)
+                    user_data['mobile_permissions'] = mobile_perms
+                    
+                    return {"status": "success", "data": user_data}
                 else:
                     return {"status": "error", "message": "Invalid Login ID or Password"}
+            else:
+                return {"status": "error", "message": "Invalid Login ID or Password"}
     except Exception as e:
+        import traceback
+        log_error("Login API Authentication", f"{str(e)}\n{traceback.format_exc()}")
         return {"status": "error", "message": str(e)}
     finally:
         if conn: conn.close()
+
+
+@router.put("/profile/{slno:int}")
+async def update_profile(slno: int, request: Request):
+    p = await request.json()
+    firstname = p.get('firstname')
+    lastname = p.get('lastname')
+    email = p.get('email')
+    remarks = p.get('remarks')
+    profile_image = p.get('profile_image') # Base64 encoded string or None
+    password = p.get('password') # Optional password field
+    
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            # If password is provided, we hash it and update
+            if password and password.strip():
+                hashed_pass = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+                cursor.execute("""
+                    UPDATE tblusers 
+                    SET firstname=%s, lastname=%s, email=%s, remarks=%s, profile_image=%s, password=%s, updateddate=CURRENT_TIMESTAMP
+                    WHERE slno=%s AND isdeleted=0
+                """, (firstname, lastname, email, remarks, profile_image, hashed_pass, slno))
+            else:
+                cursor.execute("""
+                    UPDATE tblusers 
+                    SET firstname=%s, lastname=%s, email=%s, remarks=%s, profile_image=%s, updateddate=CURRENT_TIMESTAMP
+                    WHERE slno=%s AND isdeleted=0
+                """, (firstname, lastname, email, remarks, profile_image, slno))
+            
+            conn.commit()
+            
+            # Re-fetch the updated user record including its permissions
+            cursor.execute("""
+                SELECT u.slno, u.firstname, u.lastname, u.loginid, u.userrole, u.companycodes,
+                       u.email, u.remarks, u.profile_image,
+                       r.web_permissions, r.mobile_permissions
+                FROM tblusers u
+                LEFT JOIN tbl_user_roles r ON LOWER(u.userrole) = LOWER(r.role_name) AND r.is_deleted = 0
+                WHERE u.slno = %s AND u.isdeleted = 0
+            """, (slno,))
+            row = cursor.fetchone()
+            if row:
+                # Backwards compatibility / defaults safety clamp
+                if not row.get('web_permissions') and (row.get('userrole') == 'Admin' or row.get('userrole') == 'SYS_ADMIN'):
+                    row['web_permissions'] = {
+                        "Home": ["Main", "Dynamic"],
+                        "Config": ["Customers", "Parameters", "Devices", "Param Mapping", "JSON Formatter", "JSON Mapping", "Scheduler", "Users"],
+                        "Logs": ["Alert Monitor", "PCH Logs", "API Post Monitor", "JSON Monitor", "API Access Logs", "Error", "Events"]
+                    }
+                    row['mobile_permissions'] = ["Main", "Analytics", "Enterprise"]
+                elif not row.get('web_permissions'):
+                    row['web_permissions'] = {
+                        "Home": ["Main", "Dynamic"]
+                    }
+                    row['mobile_permissions'] = ["Main"]
+                
+                return {"status": "success", "data": dict(row)}
+            else:
+                return {"status": "error", "message": "User not found after update"}
+    except Exception as e:
+        if conn: conn.rollback()
+        return {"status": "error", "message": str(e)}
+    finally:
+        if conn: conn.close()
+
 
 
 def execute_query(query: str, params: tuple = (), fetchResult: bool = True):
@@ -76,7 +189,7 @@ def get_alerts(from_date: str = None, to_date: str = None, alert_type: str = "TV
                    TO_CHAR(lastupdatedon, 'YYYY-MM-DD HH24:MI:SS') as lastrunon, 
                    continousbad as consucutive_minutes, isResolved as isresolved, 
                    CASE WHEN isResolved=1 THEN TO_CHAR(statuschangedon, 'YYYY-MM-DD HH24:MI:SS') ELSE NULL END as resolvedon, 
-                   currentstatus, tvoc_value 
+                   currentstatus, tvoc_value, remarks 
             FROM tblAlertBucketTVOC
             WHERE 1=1
         """
@@ -93,21 +206,21 @@ def get_alerts(from_date: str = None, to_date: str = None, alert_type: str = "TV
     elif alert_type == "PCH":
         query = """
             SELECT slno, deviceid, 'PCH' as param_tag, 
-                   TO_CHAR(cdatetime, 'YYYY-MM-DD HH24:MI:SS') as createdon, 
-                   count as alertsequence, 
-                   TO_CHAR(lastupdatedon, 'YYYY-MM-DD HH24:MI:SS') as lastrunon, 
-                   continousbad as consucutive_minutes, isresolved, 
-                   CASE WHEN isresolved=1 THEN TO_CHAR(statuschangedon, 'YYYY-MM-DD HH24:MI:SS') ELSE NULL END as resolvedon, 
-                   currentstatus, people_count_delta as tvoc_value 
-            FROM tblalertbucketpch
-            WHERE 1=1
+                   TO_CHAR(created_on, 'YYYY-MM-DD HH24:MI:SS') as createdon, 
+                   1 as alertsequence, 
+                   TO_CHAR(created_on, 'YYYY-MM-DD HH24:MI:SS') as lastrunon, 
+                   timeframe as consucutive_minutes, isresolved, 
+                   CASE WHEN isresolved=1 THEN TO_CHAR(resolvedon, 'YYYY-MM-DD HH24:MI:SS') ELSE NULL END as resolvedon, 
+                   currentstatus, pchcount as tvoc_value, remarks 
+            FROM tbl_pch_alert
+            WHERE isalertrequired = True
         """
         params = []
         if from_date:
-            query += " AND DATE(cdatetime) >= %s"
+            query += " AND DATE(created_on) >= %s"
             params.append(from_date)
         if to_date:
-            query += " AND DATE(cdatetime) <= %s"
+            query += " AND DATE(created_on) <= %s"
             params.append(to_date)
             
         query += " ORDER BY slno DESC LIMIT 100"
@@ -133,6 +246,51 @@ def get_alerts(from_date: str = None, to_date: str = None, alert_type: str = "TV
             
         query += " ORDER BY slno DESC LIMIT 100"
         return execute_query(query, tuple(params))
+
+# Acknowledge / Resolve an alert bucket manually
+@router.post("/alerts/{alert_type}/{slno}/acknowledge")
+def acknowledge_alert(alert_type: str, slno: int):
+    table_map = {
+        'TVOC': 'tblAlertBucketTVOC',
+        'PCH': 'tbl_pch_alert'
+    }
+    if alert_type not in table_map:
+        return {"status": "error", "message": "Invalid alert type"}
+        
+    if alert_type == 'PCH':
+        query = """
+            UPDATE tbl_pch_alert
+            SET isresolved = 1, currentstatus = 'Resolved', resolvedon = CURRENT_TIMESTAMP
+            WHERE slno = %s
+        """
+    else:
+        query = f"""
+            UPDATE {table_map[alert_type]}
+            SET isresolved = 1, currentstatus = 'Resolved', statuschangedon = CURRENT_TIMESTAMP
+            WHERE slno = %s
+        """
+    return execute_query(query, (slno,), False)
+
+# Save remark for an alert bucket
+@router.post("/alerts/{alert_type}/{slno}/remark")
+async def save_alert_remark(alert_type: str, slno: int, request: Request):
+    payload = await request.json()
+    remark = payload.get('remark', '')
+    
+    table_map = {
+        'TVOC': 'tblAlertBucketTVOC',
+        'PCH': 'tbl_pch_alert'
+    }
+    if alert_type not in table_map:
+        return {"status": "error", "message": "Invalid alert type"}
+        
+    query = f"""
+        UPDATE {table_map[alert_type]}
+        SET remarks = %s
+        WHERE slno = %s
+    """
+    return execute_query(query, (remark, slno), False)
+
 
 # ----- API DISPATCH MONITOR -----
 @router.get("/api-dispatch-monitor")
@@ -195,14 +353,14 @@ async def add_param(request: Request):
 # ----- DEVICES -----
 @router.get("/devices")
 def get_devices():
-    return execute_query("SELECT slno, customer_code, deviceid, alias, location, address, working_hours_json, active, remarks, create_json_file, post_data FROM tblDeviceMaster WHERE isDeleted=0")
+    return execute_query("SELECT slno, customer_code, deviceid, alias, location, address, working_hours_json, active, remarks, create_json_file, post_data, sim_no, operator, recharge_cycle FROM tblDeviceMaster WHERE isDeleted=0")
 
 @router.post("/devices")
 async def add_device(request: Request):
     p = await request.json()
     whj = json.dumps(p.get('working_hours_json', {}))
-    sql = "INSERT INTO tblDeviceMaster (customer_code, deviceid, alias, location, address, working_hours_json, active, remarks, create_json_file, post_data) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING slno"
-    return execute_query(sql, (p.get('customer_code'), p.get('deviceid'), p.get('alias'), p.get('location'), p.get('address'), whj, p.get('active', 1), p.get('remarks'), p.get('create_json_file', False), p.get('post_data', False)), False)
+    sql = "INSERT INTO tblDeviceMaster (customer_code, deviceid, alias, location, address, working_hours_json, active, remarks, create_json_file, post_data, sim_no, operator, recharge_cycle) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING slno"
+    return execute_query(sql, (p.get('customer_code'), p.get('deviceid'), p.get('alias'), p.get('location'), p.get('address'), whj, p.get('active', 1), p.get('remarks'), p.get('create_json_file', False), p.get('post_data', False), p.get('sim_no'), p.get('operator'), p.get('recharge_cycle')), False)
 
 # ----- JSON FORMATTERS -----
 @router.get("/formatters")
@@ -308,6 +466,57 @@ async def add_user(request: Request):
     sql = "INSERT INTO tblusers (firstname, lastname, loginid, password, userrole, companycodes) VALUES (%s, %s, %s, %s, %s, %s) RETURNING slno"
     return execute_query(sql, (p.get('firstname', p.get('First_Name')), p.get('lastname', p.get('Last_Name')), p.get('loginid', p.get('LoginId')), hashed_pass, p.get('userrole', p.get('User_role')), comp), False)
 
+# ----- USER ROLES -----
+@router.get("/roles")
+def get_roles():
+    return execute_query("SELECT slno, role_name, web_permissions, mobile_permissions FROM tbl_user_roles WHERE is_deleted=0")
+
+@router.post("/roles")
+async def add_role(request: Request):
+    p = await request.json()
+    role_name = p.get('role_name')
+    web_perm = json.dumps(p.get('web_permissions', {}))
+    mob_perm = json.dumps(p.get('mobile_permissions', []))
+    
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            # Check unique constraint (case-insensitive)
+            cursor.execute("SELECT slno FROM tbl_user_roles WHERE LOWER(role_name)=LOWER(%s) AND is_deleted=0", (role_name,))
+            if cursor.fetchone():
+                return {"status": "error", "message": "Role name must be unique"}
+            
+            cursor.execute("INSERT INTO tbl_user_roles (role_name, web_permissions, mobile_permissions) VALUES (%s, %s::jsonb, %s::jsonb) RETURNING slno", (role_name, web_perm, mob_perm))
+            conn.commit()
+            return {"status": "success"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
+        if conn: conn.close()
+
+@router.put("/roles/{slno:int}")
+async def update_role(slno: int, request: Request):
+    p = await request.json()
+    role_name = p.get('role_name')
+    web_perm = json.dumps(p.get('web_permissions', {}))
+    mob_perm = json.dumps(p.get('mobile_permissions', []))
+    
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            # Check unique constraint excluding self
+            cursor.execute("SELECT slno FROM tbl_user_roles WHERE LOWER(role_name)=LOWER(%s) AND slno != %s AND is_deleted=0", (role_name, slno))
+            if cursor.fetchone():
+                return {"status": "error", "message": "Role name must be unique"}
+            
+            cursor.execute("UPDATE tbl_user_roles SET role_name=%s, web_permissions=%s::jsonb, mobile_permissions=%s::jsonb WHERE slno=%s", (role_name, web_perm, mob_perm, slno))
+            conn.commit()
+            return {"status": "success"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
+        if conn: conn.close()
+
 # ----- DEVICE PARAM MAPPING -----
 @router.get("/param-mapping")
 def get_param_mappings():
@@ -374,7 +583,7 @@ async def add_scheduler(request: Request):
     return execute_query(sql, (p.get('customer_code'), p.get('frequency'), p.get('starting_time'), p.get('create_local_json', False), p.get('alert_req', False), p.get('alert_freq'), p.get('post_url_staging'), p.get('is_staging', False), p.get('post_url_live'), p_freqs), False)
 
 # ----- UNIVERSAL EDIT AND DELETE ENDPOINTS -----
-@router.delete("/{entity}/{slno}")
+@router.delete("/{entity}/{slno:int}")
 def delete_entity(entity: str, slno: int):
     table_map = {
         'customers': 'tblCustomerMaster',
@@ -385,13 +594,15 @@ def delete_entity(entity: str, slno: int):
         'users': 'tblUsers',
         'param-mapping': 'tblDeviceParameterMapping',
         'json-mapping': 'tblDeviceJsonMapping',
-        'schedulers': 'tblScheduler'
+        'schedulers': 'tblScheduler',
+        'roles': 'tbl_user_roles'
     }
     if entity not in table_map:
         return {"status": "error", "message": "Invalid entity context"}
-    return execute_query(f"UPDATE {table_map[entity]} SET isDeleted=1 WHERE slno=%s", (slno,), False)
+    col_name = "is_deleted" if entity == "roles" else "isDeleted"
+    return execute_query(f"UPDATE {table_map[entity]} SET {col_name}=1 WHERE slno=%s", (slno,), False)
 
-@router.put("/{entity}/{slno}")
+@router.put("/{entity}/{slno:int}")
 async def update_entity(entity: str, slno: int, request: Request):
     p = await request.json()
     if entity == "customers":
@@ -436,7 +647,7 @@ async def update_entity(entity: str, slno: int, request: Request):
                 whj_str = json.dumps(existing_whj)
                 
                 cursor.execute(
-                    "UPDATE tblDeviceMaster SET customer_code=%s, deviceid=%s, alias=%s, location=%s, address=%s, working_hours_json=%s, active=%s, remarks=%s, create_json_file=%s, post_data=%s WHERE slno=%s", 
+                    "UPDATE tblDeviceMaster SET customer_code=%s, deviceid=%s, alias=%s, location=%s, address=%s, working_hours_json=%s, active=%s, remarks=%s, create_json_file=%s, post_data=%s, sim_no=%s, operator=%s, recharge_cycle=%s WHERE slno=%s", 
                     (
                         p.get('customer_code', row['customer_code']), 
                         p.get('deviceid', row['deviceid']), 
@@ -448,6 +659,9 @@ async def update_entity(entity: str, slno: int, request: Request):
                         p.get('remarks', row['remarks']), 
                         p.get('create_json_file', row.get('create_json_file')), 
                         p.get('post_data', row.get('post_data')), 
+                        p.get('sim_no', row.get('sim_no')), 
+                        p.get('operator', row.get('operator')), 
+                        p.get('recharge_cycle', row.get('recharge_cycle')), 
                         slno
                     )
                 )
@@ -594,6 +808,380 @@ def get_pch_logs(limit: int = 100, from_date: str = None, to_date: str = None):
     params.append(limit)
     
     return execute_query(query, tuple(params))
+
+@router.get("/analytics/stats")
+def get_analytics_stats(deviceid: str, from_date: str = None, to_date: str = None):
+    import datetime
+    
+    # Defaults to past 7 days if not provided
+    to_dt = datetime.datetime.now()
+    if to_date:
+        try:
+            to_dt = datetime.datetime.strptime(to_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+        except ValueError:
+            pass
+            
+    from_dt = to_dt - datetime.timedelta(days=7)
+    if from_date:
+        try:
+            from_dt = datetime.datetime.strptime(from_date, "%Y-%m-%d").replace(hour=0, minute=0, second=0)
+        except ValueError:
+            pass
+            
+    days_count = max(1, (to_dt.date() - from_dt.date()).days + 1)
+    
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            # 1. Avg People Count snapshot overall (average hourly delta)
+            cursor.execute("""
+                SELECT COALESCE(AVG(hourly_delta), 0) as val
+                FROM (
+                    SELECT MAX(CAST(metrics->>'OUT_RAW' AS NUMERIC)) - MIN(CAST(metrics->>'OUT_RAW' AS NUMERIC)) as hourly_delta
+                    FROM tblMinuteDetails
+                    WHERE deviceid = %s AND (minute_date + minute_time) >= %s AND (minute_date + minute_time) <= %s
+                    GROUP BY DATE_TRUNC('hour', minute_date + minute_time)
+                ) sub
+            """, (deviceid, from_dt, to_dt))
+            avg_people_hour = float(cursor.fetchone()['val'])
+            
+            # 2. Avg People Count per Day (average of daily deltas)
+            cursor.execute("""
+                SELECT COALESCE(AVG(daily_delta), 0) as val
+                FROM (
+                    SELECT MAX(CAST(metrics->>'OUT_RAW' AS NUMERIC)) - MIN(CAST(metrics->>'OUT_RAW' AS NUMERIC)) as daily_delta
+                    FROM tblMinuteDetails
+                    WHERE deviceid = %s AND (minute_date + minute_time) >= %s AND (minute_date + minute_time) <= %s
+                    GROUP BY minute_date
+                ) sub
+            """, (deviceid, from_dt, to_dt))
+            avg_people_day = float(cursor.fetchone()['val'])
+            
+            # 3. PCH Alert average per day (Total PCH alerts divided by days in range)
+            cursor.execute("""
+                SELECT COUNT(*) as cnt
+                FROM tbl_pch_alert
+                WHERE deviceid = %s AND isalertrequired = True AND created_on >= %s AND created_on <= %s
+            """, (deviceid, from_dt, to_dt))
+            total_pch_alerts = cursor.fetchone()['cnt']
+            avg_pch_alerts_day = round(total_pch_alerts / days_count, 2)
+            
+            # 4. TVOC Alert average per day (Total TVOC alerts divided by days in range)
+            cursor.execute("""
+                SELECT COUNT(*) as cnt
+                FROM tblAlertBucketTVOC
+                WHERE DeviceId = %s AND CDatetime >= %s AND CDatetime <= %s
+            """, (deviceid, from_dt, to_dt))
+            total_tvoc_alerts = cursor.fetchone()['cnt']
+            avg_tvoc_alerts_day = round(total_tvoc_alerts / days_count, 2)
+            
+            # 5. Max Hour people count (hourly delta peak) and timestamp
+            cursor.execute("""
+                SELECT 
+                    TO_CHAR(DATE_TRUNC('hour', minute_date + minute_time), 'YYYY-MM-DD HH24:MI:SS') as recorded_on,
+                    MAX(CAST(metrics->>'OUT_RAW' AS NUMERIC)) - MIN(CAST(metrics->>'OUT_RAW' AS NUMERIC)) as delta_val
+                FROM tblMinuteDetails
+                WHERE deviceid = %s AND (minute_date + minute_time) >= %s AND (minute_date + minute_time) <= %s
+                GROUP BY DATE_TRUNC('hour', minute_date + minute_time)
+                ORDER BY delta_val DESC
+                LIMIT 1
+            """, (deviceid, from_dt, to_dt))
+            row_max_hr = cursor.fetchone()
+            max_hour_people = {
+                "val": float(row_max_hr['delta_val']) if row_max_hr else 0,
+                "recorded_on": row_max_hr['recorded_on'] if row_max_hr else "-"
+            }
+            
+            # 6. Max Day people count (daily delta peak) and date
+            cursor.execute("""
+                SELECT 
+                    TO_CHAR(minute_date, 'YYYY-MM-DD') as recorded_on,
+                    MAX(CAST(metrics->>'OUT_RAW' AS NUMERIC)) - MIN(CAST(metrics->>'OUT_RAW' AS NUMERIC)) as delta_val
+                FROM tblMinuteDetails
+                WHERE deviceid = %s AND (minute_date + minute_time) >= %s AND (minute_date + minute_time) <= %s
+                GROUP BY minute_date
+                ORDER BY delta_val DESC
+                LIMIT 1
+            """, (deviceid, from_dt, to_dt))
+            row_max_day = cursor.fetchone()
+            max_day_people = {
+                "val": float(row_max_day['delta_val']) if row_max_day else 0,
+                "recorded_on": row_max_day['recorded_on'] if row_max_day else "-"
+            }
+            
+            # 7. Max PCH Alert day and count
+            cursor.execute("""
+                SELECT 
+                    TO_CHAR(DATE(created_on), 'YYYY-MM-DD') as recorded_on,
+                    COUNT(*) as val
+                FROM tbl_pch_alert
+                WHERE deviceid = %s AND isalertrequired = True AND created_on >= %s AND created_on <= %s
+                GROUP BY DATE(created_on)
+                ORDER BY val DESC
+                LIMIT 1
+            """, (deviceid, from_dt, to_dt))
+            row_max_pch = cursor.fetchone()
+            max_pch_alerts = {
+                "val": int(row_max_pch['val']) if row_max_pch else 0,
+                "recorded_on": row_max_pch['recorded_on'] if row_max_pch else "-"
+            }
+            
+            # 8. Max TVOC Alert day and count
+            cursor.execute("""
+                SELECT 
+                    TO_CHAR(DATE(CDatetime), 'YYYY-MM-DD') as recorded_on,
+                    COUNT(*) as val
+                FROM tblAlertBucketTVOC
+                WHERE DeviceId = %s AND CDatetime >= %s AND CDatetime <= %s
+                GROUP BY DATE(CDatetime)
+                ORDER BY val DESC
+                LIMIT 1
+            """, (deviceid, from_dt, to_dt))
+            row_max_tvoc = cursor.fetchone()
+            max_tvoc_alerts = {
+                "val": int(row_max_tvoc['val']) if row_max_tvoc else 0,
+                "recorded_on": row_max_tvoc['recorded_on'] if row_max_tvoc else "-"
+            }
+            
+        return {
+            "status": "success",
+            "data": {
+                "avg_people_hour": round(avg_people_hour, 2),
+                "avg_people_day": round(avg_people_day, 2),
+                "avg_pch_alerts_day": avg_pch_alerts_day,
+                "avg_tvoc_alerts_day": avg_tvoc_alerts_day,
+                "max_hour_people": max_hour_people,
+                "max_day_people": max_day_people,
+                "max_pch_alerts": max_pch_alerts,
+                "max_tvoc_alerts": max_tvoc_alerts
+            }
+        }
+    except Exception as e:
+        log_error("Database (Analytics Stats API)", str(e))
+        return {"status": "error", "message": str(e)}
+    finally:
+        if conn:
+            conn.close()
+
+@router.get("/analytics/people-hourly")
+def get_analytics_people_hourly(deviceid: str, from_date: str = None, to_date: str = None):
+    import datetime
+    
+    # Defaults to past 7 days if not provided
+    to_dt = datetime.datetime.now()
+    if to_date:
+        try:
+            to_dt = datetime.datetime.strptime(to_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+        except ValueError:
+            pass
+            
+    from_dt = to_dt - datetime.timedelta(days=7)
+    if from_date:
+        try:
+            from_dt = datetime.datetime.strptime(from_date, "%Y-%m-%d").replace(hour=0, minute=0, second=0)
+        except ValueError:
+            pass
+            
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            # 1. Fetch threshold limit (pch_threshold from working_hours_json in tblDeviceMaster) for this device
+            cursor.execute("""
+                SELECT working_hours_json
+                FROM tblDeviceMaster
+                WHERE deviceid = %s
+            """, (deviceid,))
+            row_device = cursor.fetchone()
+            
+            threshold_limit = 30  # default fallback
+            if row_device and row_device['working_hours_json']:
+                import json
+                wh_json = row_device['working_hours_json']
+                if isinstance(wh_json, str):
+                    try:
+                        wh_json = json.loads(wh_json)
+                    except Exception:
+                        wh_json = {}
+                if isinstance(wh_json, dict):
+                    val = wh_json.get('pch_threshold')
+                    if val is not None:
+                        threshold_limit = int(val)
+            
+            # 2. Fetch hour-wise people count (hourly roll deltas)
+            cursor.execute("""
+                SELECT 
+                    TO_CHAR(DATE_TRUNC('hour', minute_date + minute_time), 'YYYY-MM-DD HH24:MI:SS') as hour_time,
+                    COALESCE(MAX(CAST(metrics->>'OUT_RAW' AS NUMERIC)) - MIN(CAST(metrics->>'OUT_RAW' AS NUMERIC)), 0) as avg_people
+                FROM tblMinuteDetails
+                WHERE deviceid = %s AND (minute_date + minute_time) >= %s AND (minute_date + minute_time) <= %s
+                GROUP BY DATE_TRUNC('hour', minute_date + minute_time)
+                ORDER BY hour_time ASC
+            """, (deviceid, from_dt, to_dt))
+            rows = cursor.fetchall()
+            
+            data = []
+            for r in rows:
+                data.append({
+                    "hour_time": r['hour_time'],
+                    "avg_people": round(float(r['avg_people']), 2)
+                })
+                
+        return {
+            "status": "success",
+            "threshold_limit": threshold_limit,
+            "data": data
+        }
+    except Exception as e:
+        log_error("Database (Analytics People Hourly API)", str(e))
+        return {"status": "error", "message": str(e)}
+    finally:
+        if conn:
+            conn.close()
+
+
+@router.get("/analytics/enterprise-compare")
+def get_enterprise_compare(from_date: str = None, to_date: str = None):
+    import datetime
+    
+    # Defaults to past 7 days if not provided
+    to_dt = datetime.datetime.now()
+    if to_date:
+        try:
+            to_dt = datetime.datetime.strptime(to_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+        except ValueError:
+            pass
+            
+    from_dt = to_dt - datetime.timedelta(days=7)
+    if from_date:
+        try:
+            from_dt = datetime.datetime.strptime(from_date, "%Y-%m-%d").replace(hour=0, minute=0, second=0)
+        except ValueError:
+            pass
+            
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            # Fetch all customers
+            cursor.execute("SELECT customer_code, customerName FROM tblCustomerMaster WHERE isDeleted=0")
+            customers = cursor.fetchall()
+            
+            comparison_data = []
+            for cust in customers:
+                code = cust['customer_code']
+                name = cust['customername']
+                
+                # Fetch devices for this customer
+                cursor.execute("SELECT deviceid FROM tblDeviceMaster WHERE customer_code = %s AND isDeleted=0", (code,))
+                devices = cursor.fetchall()
+                device_ids = [d['deviceid'] for d in devices]
+                
+                if not device_ids:
+                    comparison_data.append({
+                        "customer_code": code,
+                        "customer_name": name,
+                        "device_count": 0,
+                        "avg_people_hour": 0,
+                        "avg_people_day": 0,
+                        "tvoc_alerts": 0,
+                        "pch_alerts": 0,
+                        "total_alerts": 0,
+                        "avg_solve_time": 0
+                    })
+                    continue
+                
+                # Calculate metrics
+                # 1. Avg People/Hour
+                cursor.execute("""
+                    SELECT COALESCE(AVG(hourly_delta), 0) as val
+                    FROM (
+                        SELECT MAX(CAST(metrics->>'OUT_RAW' AS NUMERIC)) - MIN(CAST(metrics->>'OUT_RAW' AS NUMERIC)) as hourly_delta
+                        FROM tblMinuteDetails
+                        WHERE deviceid = ANY(%s) AND (minute_date + minute_time) >= %s AND (minute_date + minute_time) <= %s
+                        GROUP BY DATE_TRUNC('hour', minute_date + minute_time)
+                    ) sub
+                """, (device_ids, from_dt, to_dt))
+                avg_people_hour = float(cursor.fetchone()['val'])
+                
+                # 2. Avg People/Day
+                cursor.execute("""
+                    SELECT COALESCE(AVG(daily_delta), 0) as val
+                    FROM (
+                        SELECT MAX(CAST(metrics->>'OUT_RAW' AS NUMERIC)) - MIN(CAST(metrics->>'OUT_RAW' AS NUMERIC)) as daily_delta
+                        FROM tblMinuteDetails
+                        WHERE deviceid = ANY(%s) AND (minute_date + minute_time) >= %s AND (minute_date + minute_time) <= %s
+                        GROUP BY minute_date
+                    ) sub
+                """, (device_ids, from_dt, to_dt))
+                avg_people_day = float(cursor.fetchone()['val'])
+                
+                # 3. PCH Alerts
+                cursor.execute("""
+                    SELECT COUNT(*) as cnt
+                    FROM tbl_pch_alert
+                    WHERE deviceid = ANY(%s) AND isalertrequired = True AND created_on >= %s AND created_on <= %s
+                """, (device_ids, from_dt, to_dt))
+                pch_alerts = cursor.fetchone()['cnt']
+                
+                # 4. TVOC Alerts
+                cursor.execute("""
+                    SELECT COUNT(*) as cnt
+                    FROM tblAlertBucketTVOC
+                    WHERE DeviceId = ANY(%s) AND CDatetime >= %s AND CDatetime <= %s
+                """, (device_ids, from_dt, to_dt))
+                tvoc_alerts = cursor.fetchone()['cnt']
+                
+                # 5. Average Solve Time (PCH)
+                cursor.execute("""
+                    SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (resolvedon - created_on))/60), 0) as avg_mins
+                    FROM tbl_pch_alert
+                    WHERE deviceid = ANY(%s) AND isresolved = 1 AND resolvedon >= %s AND resolvedon <= %s
+                """, (device_ids, from_dt, to_dt))
+                pch_solve = float(cursor.fetchone()['avg_mins'])
+                
+                # 6. Average Solve Time (TVOC)
+                cursor.execute("""
+                    SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (statuschangedon - CDatetime))/60), 0) as avg_mins
+                    FROM tblAlertBucketTVOC
+                    WHERE DeviceId = ANY(%s) AND isResolved = 1 AND statuschangedon >= %s AND statuschangedon <= %s
+                """, (device_ids, from_dt, to_dt))
+                tvoc_solve = float(cursor.fetchone()['avg_mins'])
+                
+                # Combined resolve stats
+                cursor.execute("SELECT COUNT(*) as cnt FROM tbl_pch_alert WHERE deviceid = ANY(%s) AND isresolved = 1 AND resolvedon >= %s AND resolvedon <= %s", (device_ids, from_dt, to_dt))
+                pch_resolved_cnt = cursor.fetchone()['cnt']
+                
+                cursor.execute("SELECT COUNT(*) as cnt FROM tblAlertBucketTVOC WHERE DeviceId = ANY(%s) AND isResolved = 1 AND statuschangedon >= %s AND statuschangedon <= %s", (device_ids, from_dt, to_dt))
+                tvoc_resolved_cnt = cursor.fetchone()['cnt']
+                
+                total_resolved = pch_resolved_cnt + tvoc_resolved_cnt
+                total_solve_time = (pch_solve * pch_resolved_cnt) + (tvoc_solve * tvoc_resolved_cnt)
+                
+                avg_solve_time = round(total_solve_time / total_resolved) if total_resolved > 0 else 0
+                
+                comparison_data.append({
+                    "customer_code": code,
+                    "customer_name": name,
+                    "device_count": len(device_ids),
+                    "avg_people_hour": round(avg_people_hour),
+                    "avg_people_day": round(avg_people_day),
+                    "tvoc_alerts": tvoc_alerts,
+                    "pch_alerts": pch_alerts,
+                    "total_alerts": pch_alerts + tvoc_alerts,
+                    "avg_solve_time": avg_solve_time
+                })
+                
+        return {
+            "status": "success",
+            "data": comparison_data
+        }
+    except Exception as e:
+        import traceback
+        log_error("Database (Enterprise Compare API)", f"{str(e)}\n{traceback.format_exc()}")
+        return {"status": "error", "message": str(e)}
+    finally:
+        if conn:
+            conn.close()
+
 
 # ----- JSON MONITOR -----
 @router.get("/json-monitor")
