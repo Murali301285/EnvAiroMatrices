@@ -1183,6 +1183,81 @@ def get_enterprise_compare(from_date: str = None, to_date: str = None):
             conn.close()
 
 
+@router.get("/analytics/aqi-trend")
+def get_analytics_aqi_trend(deviceid: str, from_date: str = None, to_date: str = None):
+    import datetime
+    import traceback
+    
+    # Defaults to past 7 days if not provided
+    to_dt = datetime.datetime.now()
+    if to_date:
+        try:
+            to_dt = datetime.datetime.strptime(to_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+        except ValueError:
+            pass
+            
+    from_dt = to_dt - datetime.timedelta(days=7)
+    if from_date:
+        try:
+            from_dt = datetime.datetime.strptime(from_date, "%Y-%m-%d").replace(hour=0, minute=0, second=0)
+        except ValueError:
+            pass
+            
+    delta_days = (to_dt - from_dt).days
+    
+    # Dynamic group by and format based on length of date range to fit neatly on mobile portrait views
+    if delta_days <= 2:
+        # 15-minute averages
+        group_by_clause = "date_trunc('hour', minute_date + minute_time) + (EXTRACT(minute FROM minute_time)::int / 15 * 15) * INTERVAL '1 minute'"
+        time_format = "YYYY-MM-DD HH24:MI:SS"
+    elif delta_days <= 8:
+        # Hourly averages
+        group_by_clause = "date_trunc('hour', minute_date + minute_time)"
+        time_format = "YYYY-MM-DD HH24:MI:SS"
+    else:
+        # Daily averages
+        group_by_clause = "minute_date"
+        time_format = "YYYY-MM-DD"
+        
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            query = f"""
+                SELECT 
+                    TO_CHAR({group_by_clause}, '{time_format}') as time_label,
+                    ROUND(AVG(CAST(metrics->>'IAQ' AS NUMERIC))) as avg_aqi,
+                    ROUND(AVG(CAST(metrics->>'VOC' AS NUMERIC)), 3) as avg_voc
+                FROM tblMinuteDetails
+                WHERE deviceid = %s 
+                  AND (minute_date + minute_time) >= %s 
+                  AND (minute_date + minute_time) <= %s
+                  AND metrics ? 'IAQ'
+                GROUP BY {group_by_clause}
+                ORDER BY time_label ASC
+            """
+            cursor.execute(query, (deviceid, from_dt, to_dt))
+            rows = cursor.fetchall()
+            
+            data = []
+            for r in rows:
+                data.append({
+                    "time_label": r['time_label'],
+                    "avg_aqi": int(r['avg_aqi']) if r['avg_aqi'] is not None else 0,
+                    "avg_voc": float(r['avg_voc']) if r['avg_voc'] is not None else 0.0
+                })
+                
+        return {
+            "status": "success",
+            "data": data
+        }
+    except Exception as e:
+        log_error("Database (Analytics AQI Trend API)", f"{str(e)}\n{traceback.format_exc()}")
+        return {"status": "error", "message": str(e)}
+    finally:
+        if conn:
+            conn.close()
+
+
 # ----- JSON MONITOR -----
 @router.get("/json-monitor")
 def get_json_monitor(from_date: str = None, to_date: str = None, deviceid: str = None):

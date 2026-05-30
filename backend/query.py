@@ -1,8 +1,8 @@
-import psycopg2
-
-conn = psycopg2.connect("dbname=PromMS2_2026 user=postgres password=root host=localhost")
+from database import get_db_connection
+conn = get_db_connection()
 cur = conn.cursor()
-cur.execute("SELECT jsontemplate FROM tbljsonformatter WHERE name='woloo_scheduled_json' LIMIT 1")
-row = cur.fetchone()
-print(row[0] if row else "Not found")
-conn.close()
+try:
+    cur.execute("SELECT datetime, startdtime, pch_value, pch, is_pch_alert FROM public.sp_get_woloo_schjsoncreator('98:A3:16:D8:46:DC', '2026-05-11 19:45:00')")
+    print(cur.fetchone())
+except Exception as e:
+    print(f"ERROR: {e}")

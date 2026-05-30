@@ -167,6 +167,7 @@ export default function JsonMonitor() {
                 const diag = typeof row.diagnostics === 'string' ? JSON.parse(row.diagnostics) : row.diagnostics;
                 const pay = typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload;
                 const val = pay.pch?.pch_breach_count ?? pay.pch_breach_count;
+                const isBad = pay.pch?.condition === 'bad' || pay.pch?.condition === 'BAD';
                 return renderDiagnosticCell(
                     val, 
                     diag?.diag_pch_breach_min, 
@@ -174,7 +175,9 @@ export default function JsonMonitor() {
                     diag?.diag_pch_breach_start,
                     diag?.diag_pch_breach_end,
                     diag?.diag_pch_breach_count_rows,
-                    'bg-rose-50 text-rose-700 border-rose-100'
+                    isBad 
+                        ? 'bg-red-100 text-red-950 border-red-300 font-semibold shadow-sm animate-pulse'
+                        : 'bg-rose-50 text-rose-700 border-rose-100'
                 );
             }
         },

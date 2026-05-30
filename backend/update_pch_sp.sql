@@ -105,7 +105,10 @@ BEGIN
     v_hour_start := date_trunc('hour', v_current_time);
 
     -- PCH THRESHOLD
-    SELECT COALESCE(c.peoplelimit, 99999) INTO v_pch_threshold
+    SELECT COALESCE(
+        NULLIF(d.working_hours_json->>'pch_threshold', '')::NUMERIC,
+        c.peoplelimit
+    ) INTO v_pch_threshold
     FROM tblDeviceMaster d
     LEFT JOIN tblCustomerMaster c ON d.customer_code = c.customer_code
     WHERE d.deviceid = p_deviceid LIMIT 1;
@@ -136,21 +139,37 @@ BEGIN
 
     v_pch_max_val := ROUND(COALESCE(v_pch_max_max - v_pch_max_min, 0), 0);
 
-    -- ALERT RESET RULE: Get last alert time
-    SELECT MAX(lastupdatedon) INTO v_last_alert_time
-    FROM tblalertbucketpch tap
-    WHERE tap.deviceid = p_deviceid;
+    -- ALERT RESET RULE: Get last alert time robustly from tbl_pch_alert (strictly before current cycle)
+    SELECT MAX(tpa.created_on) INTO v_last_alert_time
+    FROM tbl_pch_alert tpa
+    WHERE tpa.deviceid = p_deviceid 
+      AND tpa.isalertrequired = true
+      AND tpa.created_on < v_window_start;
+
+    -- Fallback to tblalertbucketpch
+    IF v_last_alert_time IS NULL THEN
+        SELECT MAX(COALESCE(tap.lastupdatedon, tap.cdatetime)) INTO v_last_alert_time
+        FROM tblalertbucketpch tap
+        WHERE tap.deviceid = p_deviceid
+          AND COALESCE(tap.lastupdatedon, tap.cdatetime) < v_window_start;
+    END IF;
 
     IF v_last_alert_time IS NULL THEN
         v_last_alert_time := '1970-01-01'::TIMESTAMP;
     END IF;
     
-    -- ROLLING WINDOW START (1-hour window, Midnight reset, Alert reset)
-    v_rolling_start := GREATEST(
-        date_trunc('day', v_window_start), 
-        v_window_end - INTERVAL '1 hour',
-        v_last_alert_time
-    );
+    -- ROLLING WINDOW START (59-minute default, Midnight reset, Alert-based clamping)
+    IF v_last_alert_time > '1970-01-01'::TIMESTAMP 
+       AND (v_window_end - v_last_alert_time) <= INTERVAL '1 hour' 
+       AND v_last_alert_time <= v_window_end THEN
+        v_rolling_start := v_last_alert_time;
+    ELSE
+        v_rolling_start := v_window_end - INTERVAL '59 minutes';
+    END IF;
+
+    -- Clamp to midnight (Midnight Reset)
+    v_rolling_start := GREATEST(date_trunc('day', v_window_start), v_rolling_start);
+
 
     -- PCH.PCH_BREACH_COUNT Components
     SELECT 
@@ -166,10 +185,12 @@ BEGIN
     v_pch_breach_count := ROUND(COALESCE(v_pch_breach_max - v_pch_breach_min, 0), 0);
 
     -- PCH.CONDITION & THRESHOLD BREACH TIME
-    IF v_pch_breach_count >= v_pch_threshold THEN
+    IF v_pch_threshold IS NOT NULL AND v_pch_breach_count >= v_pch_threshold THEN
         v_pch_condition := 'bad';
         v_pch_breach_time_str := to_char(v_window_end, 'YYYY-MM-DD HH24:MI:SS');
         v_is_pch_alert := 'true';
+    ELSIF v_pch_threshold IS NULL THEN
+        v_pch_condition := 'NA';
     END IF;
 
     RETURN QUERY

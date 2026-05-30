@@ -617,10 +617,18 @@ def evaluate_pch_bucket_stream():
                     import re
                     out_match = re.search(r'OUT:([-0-9.]+)', _rev_text)
                     if out_match:
-                        # 1. Fetch threshold safely
-                        cursor.execute("SELECT c.peoplelimit FROM tblDeviceMaster d LEFT JOIN tblCustomerMaster c ON d.customer_code = c.customer_code WHERE d.deviceid=%s LIMIT 1", (_dev_id,))
+                        # 1. Fetch threshold safely from device config or customer limit
+                        cursor.execute("""
+                            SELECT COALESCE(
+                                NULLIF(d.working_hours_json->>'pch_threshold', '')::numeric,
+                                c.peoplelimit
+                            ) AS threshold
+                            FROM tblDeviceMaster d
+                            LEFT JOIN tblCustomerMaster c ON d.customer_code = c.customer_code
+                            WHERE d.deviceid=%s LIMIT 1
+                        """, (_dev_id,))
                         th_row = cursor.fetchone()
-                        threshold = float(th_row['peoplelimit']) if th_row and th_row['peoplelimit'] is not None else 10.0
+                        threshold = float(th_row['threshold']) if th_row and th_row['threshold'] is not None else None
                         
                         # 2. Block bounds (30 minutes)
                         now = datetime.datetime.now()
@@ -641,7 +649,7 @@ def evaluate_pch_bucket_stream():
                             
                         if outs:
                             delta = max(outs) - min(outs)
-                            if delta > threshold:
+                            if threshold is not None and delta > threshold:
                                 cursor.execute("SELECT slno FROM tblalertbucketpch WHERE deviceid=%s AND isresolved=0 LIMIT 1", (_dev_id,))
                                 open_bucket = cursor.fetchone()
                                 
@@ -699,10 +707,6 @@ def dispatch_pch_alerts_job():
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT peoplelimit FROM tblcustomermaster WHERE customername ILIKE '%woloo%' LIMIT 1")
-            th_row = cursor.fetchone()
-            threshold = float(th_row['peoplelimit']) if th_row and th_row['peoplelimit'] is not None else 10.0
-            
             cursor.execute("SELECT jsontemplate, storedprocedurename FROM tbljsonformatter WHERE name='woloo_scheduled_json' AND isdeleted=0 LIMIT 1")
             formatter = cursor.fetchone()
             if not formatter: return
@@ -714,6 +718,19 @@ def dispatch_pch_alerts_job():
             import re
             for b in active_alerts:
                 dev_id = b.get('deviceid')
+                # Fetch threshold safely from device's JSON config, falling back to customer limit
+                cursor.execute("""
+                    SELECT COALESCE(
+                        NULLIF(d.working_hours_json->>'pch_threshold', '')::numeric,
+                        c.peoplelimit
+                    ) AS threshold
+                    FROM tblDeviceMaster d
+                    LEFT JOIN tblCustomerMaster c ON d.customer_code = c.customer_code
+                    WHERE d.deviceid = %s LIMIT 1
+                """, (dev_id,))
+                th_row = cursor.fetchone()
+                threshold = float(th_row['threshold']) if th_row and th_row['threshold'] is not None else None
+                
                 b_slno = b.get('slno')
                 c_datetime = b.get('cdatetime')
                 sequence_count = b.get('count', 0)
@@ -748,7 +765,7 @@ def dispatch_pch_alerts_job():
                     template = formatter.get('jsontemplate') or formatter.get('jsonTemplate')
                     sp_name = formatter.get('storedprocedurename') or formatter.get('storedProcedureName')
                     
-                    if delta > threshold:
+                    if threshold is not None and delta > threshold:
                         cursor.execute("UPDATE tblalertbucketpch SET count = count + 1, continousbad=%s, lastupdatedon=%s WHERE slno=%s", (diff_mins, now, b_slno))
                         overrides = {
                             'triggered_by': 'threshold_breach', 
@@ -834,8 +851,10 @@ def dispatch_pch_alerts_job():
 
 def start_schedulers():
     scheduler = BackgroundScheduler()
-    scheduler.add_job(orchestrate_json_payloads, 'cron', minute='14,29,44,59')
-    scheduler.add_job(evaluate_active_alerts, 'cron', minute='14,29,44,59')
+    # Shifted by 2 minutes to provide Lookback Buffer for data sync
+    scheduler.add_job(orchestrate_json_payloads, 'cron', minute='2,17,32,47')
+    scheduler.add_job(evaluate_active_alerts, 'cron', minute='2,17,32,47')
+    
     scheduler.add_job(dispatch_pch_alerts_job, 'interval', minutes=1)
     scheduler.add_job(process_dlq, 'interval', minutes=2)
     
@@ -844,6 +863,6 @@ def start_schedulers():
     scheduler.add_job(evaluate_pch_bucket_stream, 'interval', minutes=1)
     
     scheduler.add_job(db_cleanup_job, 'cron', hour=0, minute=0)
-    scheduler.add_job(disk_cleanup_job, 'cron', hour=0, minute=5) # Runs slightly after DB cleanup
+    scheduler.add_job(disk_cleanup_job, 'cron', hour=0, minute=5)
     scheduler.start()
     return scheduler

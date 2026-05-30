@@ -44,14 +44,20 @@ def orchestrate_json_payloads():
             orchestrated_buckets = set()
             processed_slnos = []
 
+            # 2-minute Lookback Buffer: Only process records that arrived at least 2 mins ago
+            # This ensures the 15-min bucket is fully 'closed' before we transmit.
+            cutoff = datetime.datetime.now() - datetime.timedelta(minutes=2)
+            
             for row in unprocessed:
                 slno = row["slno"]
                 dev_id = row["deviceid"]
                 rec_on = row.get("receivedon") or row.get("receivedOn")
-                processed_slnos.append(slno)
-
-                if not rec_on:
+                
+                if not rec_on or rec_on > cutoff:
+                    # Skip records in the 'buffer zone' (they stay in the queue for next run)
                     continue
+
+                processed_slnos.append(slno)
 
                 bucket_minute = (rec_on.minute // 15) * 15
                 bucket_key = (dev_id, rec_on.date(), rec_on.hour, bucket_minute)

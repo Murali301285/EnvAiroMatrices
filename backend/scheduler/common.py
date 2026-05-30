@@ -51,6 +51,7 @@ def _parse_template(template_str, sp_name, deviceid, overrides=None, ref_time=No
         # 1. Fetch live mapping data natively from Stored Procedure logic bounds
         conn = get_db_connection()
         db_context = {}
+        diagnostics_data = None
         try:
             with conn.cursor() as cursor:
                 # Pass ref_time if provided for accurate historical snapshots
@@ -61,9 +62,13 @@ def _parse_template(template_str, sp_name, deviceid, overrides=None, ref_time=No
                 result = cursor.fetchone()
                 if result:
                     db_context = dict(result)
+                    # Preserve the original diagnostics object before flattening for the history logger
+                    diagnostics_data = db_context.get("diagnostics")
+                    if not diagnostics_data:
+                        # Pack all 'diag_' prefixed fields into diagnostics_data
+                        diagnostics_data = {k: v for k, v in db_context.items() if k.startswith("diag_")}
 
-                    # Recursively flatten nested JSON dictionaries so sub-fields
-                    # map dynamically — keeps $tag lookups simple.
+                    # Recursively flatten nested JSON dictionaries
                     for k, v in list(db_context.items()):
                         if isinstance(v, str):
                             try:
@@ -244,7 +249,20 @@ def _parse_template(template_str, sp_name, deviceid, overrides=None, ref_time=No
             final_json_string,
         )
 
-        return final_json_string, db_context
+        def _sanitize_for_json(obj):
+            if isinstance(obj, dict):
+                return {k: _sanitize_for_json(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [_sanitize_for_json(x) for x in obj]
+            elif isinstance(obj, decimal.Decimal):
+                return int(obj) if obj % 1 == 0 else float(obj)
+            elif isinstance(obj, (datetime.datetime, datetime.date, datetime.time)):
+                return obj.isoformat()
+            return obj
+
+        # Return diagnostics explicitly if found in DB context
+        sanitized_diag = _sanitize_for_json(diagnostics_data or db_context.get("diagnostics", {}))
+        return final_json_string, sanitized_diag
     except Exception as e:
         print(f"Template parsing failed: {e}")
         return template_str, {}

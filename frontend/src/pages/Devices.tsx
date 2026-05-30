@@ -27,6 +27,9 @@ export default function Devices() {
     const [formCreateJsonFile, setFormCreateJsonFile] = useState(false);
     const [formPostData, setFormPostData] = useState(false);
     const [formRemarks, setFormRemarks] = useState("");
+    const [formSimNo, setFormSimNo] = useState("");
+    const [formOperator, setFormOperator] = useState("");
+    const [formRechargeCycle, setFormRechargeCycle] = useState("");
     
     // PCH Alert Fields
     const [formPchTimeframe, setFormPchTimeframe] = useState("60");
@@ -85,7 +88,10 @@ export default function Devices() {
             active: formActive ? 1 : 0,
             create_json_file: formCreateJsonFile,
             post_data: formPostData,
-            remarks: formRemarks
+            remarks: formRemarks,
+            sim_no: formSimNo,
+            operator: formOperator,
+            recharge_cycle: formRechargeCycle
         };
 
         const req = editingId
@@ -129,6 +135,9 @@ export default function Devices() {
         setFormCreateJsonFile(row.create_json_file === 1 || row.create_json_file === true);
         setFormPostData(row.post_data === 1 || row.post_data === true);
         setFormRemarks(row.remarks || "");
+        setFormSimNo(row.sim_no || "");
+        setFormOperator(row.operator || "");
+        setFormRechargeCycle(row.recharge_cycle || "");
         setEditingId(row.slno);
         setIsAddModalOpen(true);
     };
@@ -163,6 +172,9 @@ export default function Devices() {
         setFormCreateJsonFile(false);
         setFormPostData(false);
         setFormRemarks("");
+        setFormSimNo("");
+        setFormOperator("");
+        setFormRechargeCycle("");
         setFormPchTimeframe("60");
         setFormPchThreshold("0");
     };
@@ -371,6 +383,21 @@ export default function Devices() {
                                     <input type="checkbox" checked={formPostData} onChange={e => setFormPostData(e.target.checked)} className="w-5 h-5 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 transition-all cursor-pointer accent-emerald-600" />
                                     Post The Data
                                 </label>
+                            </div>
+
+                            <div className="grid grid-cols-3 gap-4 p-4 bg-slate-50 border border-slate-100 rounded-xl">
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-700 mb-1">SIM No</label>
+                                    <input value={formSimNo} onChange={e => setFormSimNo(e.target.value)} maxLength={50} type="text" className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm bg-white" placeholder="e.g. +91 99..." />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-700 mb-1">Operator</label>
+                                    <input value={formOperator} onChange={e => setFormOperator(e.target.value)} maxLength={50} type="text" className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm bg-white" placeholder="e.g. Airtel, Jio" />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-700 mb-1">Recharge Cycle</label>
+                                    <input value={formRechargeCycle} onChange={e => setFormRechargeCycle(e.target.value)} maxLength={100} type="text" className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm bg-white" placeholder="e.g. Monthly, Annual" />
+                                </div>
                             </div>
 
                             <div className="grid grid-cols-[1fr_auto] gap-4 items-start relative z-0">

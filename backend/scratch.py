@@ -1,13 +1,24 @@
 import json
 from database import get_db_connection
-from scheduler import _parse_template
 
 conn = get_db_connection()
-cursor = conn.cursor()
-cursor.execute("SELECT storedprocedurename FROM tbljsonformatter WHERE name='woloo_scheduled_json' AND isdeleted=0 LIMIT 1")
-formatter = cursor.fetchone()
-sp_name = formatter['storedprocedurename']
-
-template = json.dumps({"client_id": "Silotech", "device_id": "98:A3:16:D8:46:DC", "node_name": "$node_name"})
-
-print(_parse_template(template, sp_name, '98:A3:16:D8:46:DC', {'alert_sequence': 1}))
+try:
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT * FROM sp_get_woloo_schjsoncreator('98:A3:16:D8:46:DC')")
+        row = cursor.fetchone()
+        if row:
+            print("PCH JSON:")
+            pch_data = row['pch']
+            if isinstance(pch_data, str):
+                pch_data = json.loads(pch_data)
+            print(json.dumps(pch_data, indent=2))
+            
+            print("\nDIAGNOSTICS:")
+            print(f"  Breach Window: {row['diag_pch_breach_start']} to {row['diag_pch_breach_end']}")
+            print(f"  Breach Count Rows: {row['diag_pch_breach_count_rows']}")
+        else:
+            print("No data found!")
+except Exception as e:
+    print("Error:", e)
+finally:
+    conn.close()
