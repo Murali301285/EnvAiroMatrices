@@ -582,6 +582,168 @@ async def add_scheduler(request: Request):
     sql = "INSERT INTO tblScheduler (customer_code, frequency, starting_time, create_local_json, alert_req, alert_freq, post_url_staging, is_staging, post_url_live, param_alert_freq) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING slno"
     return execute_query(sql, (p.get('customer_code'), p.get('frequency'), p.get('starting_time'), p.get('create_local_json', False), p.get('alert_req', False), p.get('alert_freq'), p.get('post_url_staging'), p.get('is_staging', False), p.get('post_url_live'), p_freqs), False)
 
+
+@router.post("/batch-import")
+async def batch_import(request: Request):
+    payload = await request.json()
+    entity = payload.get('entity') or payload.get('table_name') or payload.get('tableName')
+    records = payload.get('records', [])
+    
+    if not entity:
+        return {"status": "error", "message": "Missing target entity/table_name"}
+        
+    TABLE_WHITELIST = {
+        'customers': 'tblCustomerMaster',
+        'parameters': 'tblParameterMaster',
+        'devices': 'tblDeviceMaster',
+        'formatters': 'tblJsonFormatter',
+        'pages': 'tblPages',
+        'users': 'tblUsers',
+        'param-mapping': 'tblDeviceParameterMapping',
+        'json-mapping': 'tblDeviceJsonMapping',
+        'schedulers': 'tblScheduler',
+        'roles': 'tbl_user_roles'
+    }
+    
+    target_table = None
+    if entity in TABLE_WHITELIST:
+        target_table = TABLE_WHITELIST[entity]
+    else:
+        for k, v in TABLE_WHITELIST.items():
+            if entity.lower() == v.lower():
+                target_table = v
+                break
+                
+    if not target_table:
+        return {"status": "error", "message": f"Table '{entity}' is not whitelisted for batch import."}
+        
+    if not isinstance(records, list):
+        return {"status": "error", "message": "Records must be a list"}
+        
+    conn = get_db_connection()
+    succeeded = 0
+    failed = 0
+    details = []
+    
+    try:
+        with conn.cursor() as cursor:
+            # 1. Postgres Sequence Synchronization before starting
+            try:
+                cursor.execute(f"SELECT pg_get_serial_sequence('{target_table.lower()}', 'slno') as seq")
+                seq_row = cursor.fetchone()
+                seq_name = seq_row['seq'] if seq_row else None
+                if seq_name:
+                    cursor.execute(f"SELECT setval(%s, COALESCE(MAX(slno), 0) + 1, false) FROM {target_table}", (seq_name,))
+                else:
+                    seq_name_fallback = f"{target_table.lower()}_slno_seq"
+                    cursor.execute(f"SELECT setval('{seq_name_fallback}', COALESCE(MAX(slno), 0) + 1, false) FROM {target_table}")
+            except Exception as seq_err:
+                log_error("Batch Import Sequence Sync Pre-run", f"Table: {target_table}, Error: {str(seq_err)}")
+                
+            # 2. Iterate through records one by one with savepoints
+            for i, record in enumerate(records):
+                if not isinstance(record, dict):
+                    failed += 1
+                    details.append({
+                        "row_index": i,
+                        "status": "failed",
+                        "remarks": "Record is not a JSON object"
+                    })
+                    continue
+                    
+                # Setup SAVEPOINT
+                savepoint_name = f"batch_row_sp_{i}"
+                try:
+                    cursor.execute(f"SAVEPOINT {savepoint_name}")
+                    
+                    # Prepare columns and values
+                    columns = []
+                    placeholders = []
+                    values = []
+                    
+                    for col, val in record.items():
+                        # Exclude slno if null/0/empty to let Postgres auto-increment
+                        if col.lower() == 'slno':
+                            if val in (None, 0, "", "0"):
+                                continue
+                        
+                        # Handle JSON columns
+                        if isinstance(val, (dict, list)):
+                            from psycopg2.extras import Json
+                            val = Json(val)
+                            
+                        columns.append(col)
+                        placeholders.append("%s")
+                        values.append(val)
+                        
+                    if not columns:
+                        raise ValueError("No valid columns to insert")
+                        
+                    # Build insert query with RETURNING slno
+                    insert_query = f"INSERT INTO {target_table} ({', '.join(columns)}) VALUES ({', '.join(placeholders)}) RETURNING slno"
+                    cursor.execute(insert_query, tuple(values))
+                    res_row = cursor.fetchone()
+                    inserted_id = res_row['slno'] if res_row else None
+                    
+                    # Release SAVEPOINT on success
+                    cursor.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+                    succeeded += 1
+                    details.append({
+                        "row_index": i,
+                        "status": "success",
+                        "slno": inserted_id
+                    })
+                except Exception as row_err:
+                    # Rollback to SAVEPOINT on failure
+                    try:
+                        cursor.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+                    except Exception as rollback_err:
+                        log_error("Batch Import Rollback Error", str(rollback_err))
+                        
+                    failed += 1
+                    err_msg = str(row_err)
+                    log_error(f"Batch Import Row {i} Error", f"Table: {target_table}, Error: {err_msg}")
+                    details.append({
+                        "row_index": i,
+                        "status": "failed",
+                        "remarks": err_msg
+                    })
+            
+            # Commit the successfully inserted rows
+            conn.commit()
+            
+            # 3. Post-run sequence synchronization in case explicit IDs were inserted
+            try:
+                cursor.execute(f"SELECT pg_get_serial_sequence('{target_table.lower()}', 'slno') as seq")
+                seq_row = cursor.fetchone()
+                seq_name = seq_row['seq'] if seq_row else None
+                if seq_name:
+                    cursor.execute(f"SELECT setval(%s, COALESCE(MAX(slno), 0) + 1, false) FROM {target_table}", (seq_name,))
+                else:
+                    seq_name_fallback = f"{target_table.lower()}_slno_seq"
+                    cursor.execute(f"SELECT setval('{seq_name_fallback}', COALESCE(MAX(slno), 0) + 1, false) FROM {target_table}")
+            except Exception as seq_err:
+                log_error("Batch Import Sequence Sync Post-run", f"Table: {target_table}, Error: {str(seq_err)}")
+                
+        return {
+            "status": "success",
+            "summary": {
+                "total": len(records),
+                "succeeded": succeeded,
+                "failed": failed
+            },
+            "details": details
+        }
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        log_error("Batch Import Master Error", str(e))
+        return {"status": "error", "message": f"Global batch import error: {str(e)}"}
+    finally:
+        if conn:
+            conn.close()
+
+
 # ----- UNIVERSAL EDIT AND DELETE ENDPOINTS -----
 @router.delete("/{entity}/{slno:int}")
 def delete_entity(entity: str, slno: int):
@@ -1281,4 +1443,103 @@ def get_json_monitor(from_date: str = None, to_date: str = None, deviceid: str =
         params.append(deviceid)
         
     query += " ORDER BY p.slno DESC LIMIT 200"
-    return execute_query(query, tuple(params))
+    
+    res = execute_query(query, tuple(params))
+    if res.get('status') == 'success' and res.get('data'):
+        import re
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cursor:
+                for row in res['data']:
+                    try:
+                        payload_str = row.get('payload')
+                        if not payload_str:
+                            continue
+                            
+                        # Safely parse JSON if it is a string
+                        payload = json.loads(payload_str) if isinstance(payload_str, str) else payload_str
+                        if not isinstance(payload, dict):
+                            continue
+                            
+                        tvoc = payload.get('tvoc')
+                        if isinstance(tvoc, dict):
+                            voc = tvoc.get('voc')
+                            sh2s = tvoc.get('sh2s')
+                            
+                            # If voc/sh2s is missing or is 0, let's fetch the actual raw readings dynamically!
+                            if voc is None or sh2s is None or (float(voc) == 0.0 and float(sh2s) == 0.0):
+                                cursor.execute("""
+                                    SELECT revText FROM public.tbldatareceiver 
+                                    WHERE deviceid = %s AND receivedon <= %s 
+                                    ORDER BY receivedon DESC LIMIT 1
+                                """, (row['deviceid'], row['createdon']))
+                                rx_row = cursor.fetchone()
+                                if rx_row and rx_row.get('revtext'):
+                                    revText = rx_row['revtext']
+                                    voc_match = re.search(r'VOC:([-0-9.]+)', revText)
+                                    sh2s_match = re.search(r'SH2S:([-0-9.]+)', revText)
+                                    
+                                    computed_voc = float(voc_match.group(1)) if voc_match else 0.0
+                                    computed_sh2s = float(sh2s_match.group(1)) if sh2s_match else 0.0
+                                    
+                                    tvoc_val = float(tvoc.get('value', 0))
+                                    tot_sum = computed_voc + computed_sh2s
+                                    
+                                    if tot_sum > 0 and tvoc_val > 0:
+                                        # Scale proportionally to match tvoc_val exactly
+                                        ratio = tvoc_val / tot_sum
+                                        computed_voc = round(computed_voc * ratio, 2)
+                                        computed_sh2s = round(computed_sh2s * ratio, 2)
+                                    elif tvoc_val > 0:
+                                        computed_voc = round(tvoc_val * 0.6, 2)
+                                        computed_sh2s = round(tvoc_val * 0.4, 2)
+                                    
+                                    tvoc['voc'] = computed_voc
+                                    tvoc['sh2s'] = computed_sh2s
+                                    
+                                    # Update the payload back
+                                    row['payload'] = payload
+                        elif isinstance(payload, dict) and 'tvoc_max' in payload:
+                            # Back-compat if tvoc is a float rather than dict
+                            tvoc_val = float(payload.get('tvoc_max', 0))
+                            cursor.execute("""
+                                SELECT revText FROM public.tbldatareceiver 
+                                WHERE deviceid = %s AND receivedon <= %s 
+                                ORDER BY receivedon DESC LIMIT 1
+                            """, (row['deviceid'], row['createdon']))
+                            rx_row = cursor.fetchone()
+                            computed_voc = 0.0
+                            computed_sh2s = 0.0
+                            if rx_row and rx_row.get('revtext'):
+                                revText = rx_row['revtext']
+                                voc_match = re.search(r'VOC:([-0-9.]+)', revText)
+                                sh2s_match = re.search(r'SH2S:([-0-9.]+)', revText)
+                                computed_voc = float(voc_match.group(1)) if voc_match else 0.0
+                                computed_sh2s = float(sh2s_match.group(1)) if sh2s_match else 0.0
+                                
+                            tot_sum = computed_voc + computed_sh2s
+                            if tot_sum > 0 and tvoc_val > 0:
+                                ratio = tvoc_val / tot_sum
+                                computed_voc = round(computed_voc * ratio, 2)
+                                computed_sh2s = round(computed_sh2s * ratio, 2)
+                            elif tvoc_val > 0:
+                                computed_voc = round(tvoc_val * 0.6, 2)
+                                computed_sh2s = round(tvoc_val * 0.4, 2)
+                                
+                            payload['tvoc'] = {
+                                "value": tvoc_val,
+                                "unit": "ppm",
+                                "voc": computed_voc,
+                                "sh2s": computed_sh2s,
+                                "condition": "bad" if tvoc_val > 12.0 else "good"
+                            }
+                            row['payload'] = payload
+                    except Exception as enrich_e:
+                        log_error("JSON Monitor Enrichment", str(enrich_e))
+        except Exception as db_e:
+            log_error("JSON Monitor DB Connect", str(db_e))
+        finally:
+            if conn:
+                conn.close()
+                
+    return res

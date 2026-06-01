@@ -85,6 +85,12 @@ DECLARE
     v_pch_condition    VARCHAR := 'good';
     v_pch_breach_time_str VARCHAR := '';
     
+    -- New loop variables for PCH Max Hour sum
+    v_current_interval_start TIMESTAMP;
+    v_interval_min      NUMERIC;
+    v_interval_max      NUMERIC;
+    v_interval_pch      NUMERIC;
+    
 BEGIN
     SELECT r.receivedOn INTO v_latest_timestamp
     FROM public.tbldatareceiver r
@@ -137,7 +143,25 @@ BEGIN
       AND tmd.created_at >= v_hour_start
       AND tmd.created_at <= v_window_end;
 
-    v_pch_max_val := ROUND(COALESCE(v_pch_max_max - v_pch_max_min, 0), 0);
+    -- New PCH MAX logic: Sum of individual 15-minute PCH cycles in this calendar hour
+    v_pch_max_val := 0;
+    v_current_interval_start := v_hour_start;
+    
+    WHILE v_current_interval_start <= v_window_start LOOP
+        SELECT 
+            MIN((metrics->>'OUT_RAW')::NUMERIC),
+            MAX((metrics->>'OUT_RAW')::NUMERIC)
+        INTO v_interval_min, v_interval_max
+        FROM public.tblminutedetails tmd
+        WHERE tmd.deviceid = p_deviceid
+          AND tmd.created_at >= v_current_interval_start
+          AND tmd.created_at <= v_current_interval_start + INTERVAL '14 minutes';
+          
+        v_interval_pch := ROUND(COALESCE(v_interval_max - v_interval_min, 0), 0);
+        v_pch_max_val := v_pch_max_val + v_interval_pch;
+        
+        v_current_interval_start := v_current_interval_start + INTERVAL '15 minutes';
+    END LOOP;
 
     -- ALERT RESET RULE: Get last alert time robustly from tbl_pch_alert (strictly before current cycle)
     SELECT MAX(tpa.created_on) INTO v_last_alert_time
@@ -158,13 +182,14 @@ BEGIN
         v_last_alert_time := '1970-01-01'::TIMESTAMP;
     END IF;
     
-    -- ROLLING WINDOW START (59-minute default, Midnight reset, Alert-based clamping)
-    IF v_last_alert_time > '1970-01-01'::TIMESTAMP 
-       AND (v_window_end - v_last_alert_time) <= INTERVAL '1 hour' 
-       AND v_last_alert_time <= v_window_end THEN
-        v_rolling_start := v_last_alert_time;
+    -- ROLLING WINDOW START (Check previous hours and when last breach alert was raised, choosing whichever is later)
+    IF v_last_alert_time > '1970-01-01'::TIMESTAMP THEN
+        v_rolling_start := GREATEST(
+            v_window_end - INTERVAL '1 hour',
+            v_last_alert_time
+        );
     ELSE
-        v_rolling_start := v_window_end - INTERVAL '59 minutes';
+        v_rolling_start := v_window_end - INTERVAL '1 hour';
     END IF;
 
     -- Clamp to midnight (Midnight Reset)
@@ -182,7 +207,25 @@ BEGIN
       AND tmd.created_at >= v_rolling_start
       AND tmd.created_at <= v_window_end;
 
-    v_pch_breach_count := ROUND(COALESCE(v_pch_breach_max - v_pch_breach_min, 0), 0);
+    -- New PCH Breach (Rolling) sum logic: Sum of 15-minute PCH cycles inside the dynamic rolling window
+    v_pch_breach_count := 0;
+    v_current_interval_start := v_rolling_start;
+    
+    WHILE v_current_interval_start <= v_window_start LOOP
+        SELECT 
+            MIN((metrics->>'OUT_RAW')::NUMERIC),
+            MAX((metrics->>'OUT_RAW')::NUMERIC)
+        INTO v_interval_min, v_interval_max
+        FROM public.tblminutedetails tmd
+        WHERE tmd.deviceid = p_deviceid
+          AND tmd.created_at >= v_current_interval_start
+          AND tmd.created_at <= v_current_interval_start + INTERVAL '14 minutes';
+          
+        v_interval_pch := ROUND(COALESCE(v_interval_max - v_interval_min, 0), 0);
+        v_pch_breach_count := v_pch_breach_count + v_interval_pch;
+        
+        v_current_interval_start := v_current_interval_start + INTERVAL '15 minutes';
+    END LOOP;
 
     -- PCH.CONDITION & THRESHOLD BREACH TIME
     IF v_pch_threshold IS NOT NULL AND v_pch_breach_count >= v_pch_threshold THEN

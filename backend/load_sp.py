@@ -9,6 +9,9 @@ def update_sp():
         with conn.cursor() as cursor:
             # Safely drop the existing schema sequence manually so that parameter output modifications strictly apply.
             cursor.execute("DROP FUNCTION IF EXISTS public.sp_get_woloo_schjsoncreator(character varying);")
+            cursor.execute("DROP FUNCTION IF EXISTS public.sp_get_woloo_schjsoncreator(text);")
+            cursor.execute("DROP FUNCTION IF EXISTS public.sp_get_woloo_schjsoncreator(character varying, timestamp without time zone);")
+            cursor.execute("DROP FUNCTION IF EXISTS public.sp_get_woloo_schjsoncreator(text, timestamp without time zone);")
             cursor.execute(sql)
         conn.commit()
         print("Successfully updated Stored Procedure!")

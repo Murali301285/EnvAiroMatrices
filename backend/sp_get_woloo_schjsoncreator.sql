@@ -105,7 +105,9 @@
                     SELECT 
                         LEAST(15.00, ROUND(COALESCE(AVG(COALESCE((metrics->>'VOC')::NUMERIC, 0) + COALESCE((metrics->>'SH2S')::NUMERIC, 0)), 0), 2)) AS tvoc_avg,
                         LEAST(15.00, ROUND(COALESCE(MAX(COALESCE((metrics->>'VOC')::NUMERIC, 0) + COALESCE((metrics->>'SH2S')::NUMERIC, 0)), 0), 2)) AS tvoc_max,
-                        LEAST(15.00, ROUND(COALESCE(MIN(COALESCE((metrics->>'VOC')::NUMERIC, 0) + COALESCE((metrics->>'SH2S')::NUMERIC, 0)), 0), 2)) AS tvoc_min
+                        LEAST(15.00, ROUND(COALESCE(MIN(COALESCE((metrics->>'VOC')::NUMERIC, 0) + COALESCE((metrics->>'SH2S')::NUMERIC, 0)), 0), 2)) AS tvoc_min,
+                        ROUND(COALESCE(MAX(COALESCE((metrics->>'VOC')::NUMERIC, 0)), 0), 2) AS voc_max,
+                        ROUND(COALESCE(MAX(COALESCE((metrics->>'SH2S')::NUMERIC, 0)), 0), 2) AS sh2s_max
                     FROM tblminutedetails
                     WHERE tblminutedetails.deviceid = p_deviceid 
                       AND created_at >= v_window_start 
@@ -145,13 +147,15 @@
                     json_build_object(
                          'value', ha.tvoc_max,
                          'unit', 'ppm',
+                         'voc', ha.voc_max,
+                         'sh2s', ha.sh2s_max,
                          'condition', CASE WHEN ha.tvoc_max > 12.0 THEN 'bad' ELSE 'good' END
                     )::JSON AS tvoc,
                     
                     ha.tvoc_avg::NUMERIC,
                     ha.tvoc_max::NUMERIC,
                     ha.tvoc_min::NUMERIC,
-                    0 AS tvoc_bad,
+                    CASE WHEN ha.tvoc_max > 12.0 THEN 1 ELSE 0 END AS tvoc_bad,
                     
                     dp.current_out - dp.start_out::NUMERIC AS pcd,
                     dp.current_out - dp.start_out::NUMERIC AS pcd_max,

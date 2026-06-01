@@ -88,8 +88,23 @@ export default function JsonMonitor() {
         {
             accessorKey: 'createdon',
             header: 'Posted On',
-            cell: info => <span className="text-slate-400 font-mono text-[10px] whitespace-nowrap">{info.getValue()?.split(' ')[1]}</span>,
-            size: 80
+            cell: info => {
+                const rawVal = info.getValue() || '';
+                const parts = rawVal.split(' ');
+                const datePart = parts[0] || '';
+                const timePart = parts[1] || '';
+                
+                const dateParts = datePart.split('-');
+                const formattedDate = dateParts.length === 3 ? `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}` : datePart;
+                
+                return (
+                    <div className="flex flex-col items-center justify-center font-mono text-[10px] whitespace-nowrap gap-0.5">
+                        <span className="text-slate-500 font-bold text-[9px]">{formattedDate}</span>
+                        <span className="text-slate-400">{timePart}</span>
+                    </div>
+                );
+            },
+            size: 90
         },
         {
             id: 'device',
@@ -183,22 +198,54 @@ export default function JsonMonitor() {
         },
         {
             id: 'tvoc_sh2s',
-            header: 'Air Quality',
+            header: 'TVOC',
             cell: info => {
                 const row = info.row.original;
                 const pay = typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload;
                 const tvoc_val = pay.tvoc?.value ?? pay.tvoc_max ?? 0;
+                
+                const voc_val = pay.tvoc?.voc ?? pay.voc_max ?? 0;
+                const sh2s_val = pay.tvoc?.sh2s ?? pay.sh2s_max ?? 0;
+                
+                const isBad = pay.tvoc?.condition === 'bad' || pay.tvoc?.condition === 'BAD' || tvoc_val > 12.0;
+                
                 return (
-                    <div className="flex flex-col gap-1 p-2 bg-purple-50/30 rounded-xl border border-purple-100">
-                         <div className="flex items-center justify-between text-[9px] font-bold text-purple-400 uppercase">
-                            <span>Range</span>
-                            <span>{pay.tvoc?.unit || 'ppm'}</span>
+                    <div 
+                        className={`relative group flex flex-col items-center justify-center p-3 rounded-2xl border transition-all duration-300 min-h-[60px] cursor-help shadow-sm hover:z-50 ${
+                            isBad 
+                                ? 'bg-red-100 text-red-950 border-red-300 shadow-md animate-pulse font-semibold' 
+                                : 'bg-purple-50/30 text-purple-700 border-purple-100 hover:bg-purple-50/50 hover:shadow-md'
+                        }`}
+                    >
+                         {/* TVOC Value */}
+                         <div className={`text-base font-black tracking-tight ${isBad ? 'text-red-900' : 'text-purple-700'}`}>
+                            {tvoc_val} <span className="text-[10px] font-bold opacity-60 ml-0.5">ppm</span>
                          </div>
-                         <div className="text-[10px] font-mono text-slate-600 bg-white px-1.5 py-0.5 rounded border border-purple-50">
-                            {pay.tvoc_min || 0} - {pay.tvoc_max || 0}
-                         </div>
-                         <div className="text-sm font-black text-purple-700 text-center py-0.5">
-                            {tvoc_val}
+                         
+                         {/* Custom Designed Tooltip */}
+                         <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2.5 hidden group-hover:flex flex-col bg-slate-950/95 backdrop-blur-md text-white text-[10px] px-3.5 py-2.5 rounded-2xl shadow-2xl border border-white/10 z-50 w-48 text-left gap-1 animate-in fade-in zoom-in-95 duration-200 pointer-events-none">
+                             <div className="flex items-center justify-between border-b border-white/10 pb-1.5 mb-1.5">
+                                 <span className="font-bold uppercase tracking-wider text-[9px] text-slate-400">TVOC Status</span>
+                                 <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
+                                     isBad ? 'bg-red-500/20 text-red-300 border border-red-500/30' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                 }`}>
+                                     {isBad ? 'Bad' : 'Good'}
+                                 </span>
+                             </div>
+                             <div className="flex items-center justify-between font-medium text-slate-300">
+                                 <span>VOC Reading:</span>
+                                 <span className="font-bold text-white font-mono">{voc_val} ppm</span>
+                             </div>
+                             <div className="flex items-center justify-between font-medium text-slate-300">
+                                 <span>SH2S Reading:</span>
+                                 <span className="font-bold text-white font-mono">{sh2s_val} ppm</span>
+                             </div>
+                             <div className="h-px bg-white/10 my-1"></div>
+                             <p className="text-[9px] text-slate-400 leading-normal">
+                                 Limit: TVOC &gt; 12.0 ppm is Bad, &le; 12.0 ppm is Good.
+                             </p>
+                             {/* Tooltip Arrow */}
+                             <div className="absolute top-full left-1/2 -translate-x-1/2 w-2 h-2 bg-slate-950/95 rotate-45 border-r border-b border-white/10 -mt-1"></div>
                          </div>
                     </div>
                 );
