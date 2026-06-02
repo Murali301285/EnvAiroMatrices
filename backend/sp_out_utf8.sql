@@ -90,6 +90,7 @@ DECLARE
     v_interval_min      NUMERIC;
     v_interval_max      NUMERIC;
     v_interval_pch      NUMERIC;
+    v_prev_interval_max NUMERIC;
     
 BEGIN
     SELECT r.receivedOn INTO v_latest_timestamp
@@ -130,7 +131,24 @@ BEGIN
       AND (tmd.minute_date + tmd.minute_time) >= v_window_start
       AND (tmd.minute_date + tmd.minute_time) <= v_window_end;
     
-    v_pch_cycle_val := ROUND(COALESCE(v_pch_cycle_max - v_pch_cycle_min, 0), 0);
+    -- Get the previous cycle's MAX value if it exists (for cycle 2, 3, 4 of the calendar hour) to capture inter-cycle transitions
+    IF v_window_start > v_hour_start THEN
+        SELECT MAX((metrics->>'OUT_RAW')::NUMERIC)
+        INTO v_prev_interval_max
+        FROM public.tblminutedetails tmd
+        WHERE tmd.deviceid = p_deviceid
+          AND (tmd.minute_date + tmd.minute_time) >= (v_window_start - INTERVAL '15 minutes')
+          AND (tmd.minute_date + tmd.minute_time) <= (v_window_start - INTERVAL '1 minute');
+    ELSE
+        v_prev_interval_max := NULL;
+    END IF;
+
+    IF v_prev_interval_max IS NOT NULL AND v_pch_cycle_max IS NOT NULL THEN
+        v_pch_cycle_val := ROUND(COALESCE(v_pch_cycle_max - v_prev_interval_max, 0), 0);
+    ELSE
+        v_pch_cycle_val := ROUND(COALESCE(v_pch_cycle_max - v_pch_cycle_min, 0), 0);
+    END IF;
+    v_pch_cycle_val := GREATEST(0, v_pch_cycle_val);
       
     -- PCH_MAX Components
     SELECT 
@@ -143,9 +161,10 @@ BEGIN
       AND (tmd.minute_date + tmd.minute_time) >= v_hour_start
       AND (tmd.minute_date + tmd.minute_time) <= v_window_end;
 
-    -- New PCH MAX logic: Sum of individual 15-minute PCH cycles in this calendar hour
+    -- New PCH MAX logic: Sum of individual 15-minute PCH cycles in this calendar hour using previous max
     v_pch_max_val := 0;
     v_current_interval_start := v_hour_start;
+    v_prev_interval_max := NULL;
     
     WHILE v_current_interval_start <= v_window_start LOOP
         SELECT 
@@ -157,8 +176,16 @@ BEGIN
           AND (tmd.minute_date + tmd.minute_time) >= v_current_interval_start
           AND (tmd.minute_date + tmd.minute_time) <= v_current_interval_start + INTERVAL '14 minutes';
           
-        v_interval_pch := ROUND(COALESCE(v_interval_max - v_interval_min, 0), 0);
-        v_pch_max_val := v_pch_max_val + v_interval_pch;
+        IF v_interval_max IS NOT NULL THEN
+            IF v_prev_interval_max IS NULL THEN
+                v_interval_pch := ROUND(COALESCE(v_interval_max - v_interval_min, 0), 0);
+            ELSE
+                v_interval_pch := ROUND(COALESCE(v_interval_max - v_prev_interval_max, 0), 0);
+            END IF;
+            v_interval_pch := GREATEST(0, v_interval_pch);
+            v_pch_max_val := v_pch_max_val + v_interval_pch;
+            v_prev_interval_max := v_interval_max;
+        END IF;
         
         v_current_interval_start := v_current_interval_start + INTERVAL '15 minutes';
     END LOOP;
@@ -207,9 +234,10 @@ BEGIN
       AND (tmd.minute_date + tmd.minute_time) >= v_rolling_start
       AND (tmd.minute_date + tmd.minute_time) <= v_window_end;
 
-    -- New PCH Breach (Rolling) sum logic: Sum of 15-minute PCH cycles inside the dynamic rolling window
+    -- New PCH Breach (Rolling) sum logic: Sum of 15-minute PCH cycles inside the dynamic rolling window using previous max
     v_pch_breach_count := 0;
     v_current_interval_start := v_rolling_start;
+    v_prev_interval_max := NULL;
     
     WHILE v_current_interval_start <= v_window_start LOOP
         SELECT 
@@ -221,8 +249,16 @@ BEGIN
           AND (tmd.minute_date + tmd.minute_time) >= v_current_interval_start
           AND (tmd.minute_date + tmd.minute_time) <= v_current_interval_start + INTERVAL '14 minutes';
           
-        v_interval_pch := ROUND(COALESCE(v_interval_max - v_interval_min, 0), 0);
-        v_pch_breach_count := v_pch_breach_count + v_interval_pch;
+        IF v_interval_max IS NOT NULL THEN
+            IF v_prev_interval_max IS NULL THEN
+                v_interval_pch := ROUND(COALESCE(v_interval_max - v_interval_min, 0), 0);
+            ELSE
+                v_interval_pch := ROUND(COALESCE(v_interval_max - v_prev_interval_max, 0), 0);
+            END IF;
+            v_interval_pch := GREATEST(0, v_interval_pch);
+            v_pch_breach_count := v_pch_breach_count + v_interval_pch;
+            v_prev_interval_max := v_interval_max;
+        END IF;
         
         v_current_interval_start := v_current_interval_start + INTERVAL '15 minutes';
     END LOOP;
