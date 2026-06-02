@@ -127,8 +127,8 @@ BEGIN
     INTO v_pch_cycle_min, v_pch_cycle_max, v_pch_cycle_count
     FROM public.tblminutedetails tmd
     WHERE tmd.deviceid = p_deviceid
-      AND tmd.created_at >= v_window_start
-      AND tmd.created_at <= v_window_end;
+      AND (tmd.minute_date + tmd.minute_time) >= v_window_start
+      AND (tmd.minute_date + tmd.minute_time) <= v_window_end;
     
     v_pch_cycle_val := ROUND(COALESCE(v_pch_cycle_max - v_pch_cycle_min, 0), 0);
       
@@ -140,8 +140,8 @@ BEGIN
     INTO v_pch_max_min, v_pch_max_max, v_pch_max_count
     FROM public.tblminutedetails tmd
     WHERE tmd.deviceid = p_deviceid
-      AND tmd.created_at >= v_hour_start
-      AND tmd.created_at <= v_window_end;
+      AND (tmd.minute_date + tmd.minute_time) >= v_hour_start
+      AND (tmd.minute_date + tmd.minute_time) <= v_window_end;
 
     -- New PCH MAX logic: Sum of individual 15-minute PCH cycles in this calendar hour
     v_pch_max_val := 0;
@@ -154,8 +154,8 @@ BEGIN
         INTO v_interval_min, v_interval_max
         FROM public.tblminutedetails tmd
         WHERE tmd.deviceid = p_deviceid
-          AND tmd.created_at >= v_current_interval_start
-          AND tmd.created_at <= v_current_interval_start + INTERVAL '14 minutes';
+          AND (tmd.minute_date + tmd.minute_time) >= v_current_interval_start
+          AND (tmd.minute_date + tmd.minute_time) <= v_current_interval_start + INTERVAL '14 minutes';
           
         v_interval_pch := ROUND(COALESCE(v_interval_max - v_interval_min, 0), 0);
         v_pch_max_val := v_pch_max_val + v_interval_pch;
@@ -204,8 +204,8 @@ BEGIN
     INTO v_pch_breach_min, v_pch_breach_max, v_pch_breach_count_rows
     FROM public.tblminutedetails tmd
     WHERE tmd.deviceid = p_deviceid
-      AND tmd.created_at >= v_rolling_start
-      AND tmd.created_at <= v_window_end;
+      AND (tmd.minute_date + tmd.minute_time) >= v_rolling_start
+      AND (tmd.minute_date + tmd.minute_time) <= v_window_end;
 
     -- New PCH Breach (Rolling) sum logic: Sum of 15-minute PCH cycles inside the dynamic rolling window
     v_pch_breach_count := 0;
@@ -218,8 +218,8 @@ BEGIN
         INTO v_interval_min, v_interval_max
         FROM public.tblminutedetails tmd
         WHERE tmd.deviceid = p_deviceid
-          AND tmd.created_at >= v_current_interval_start
-          AND tmd.created_at <= v_current_interval_start + INTERVAL '14 minutes';
+          AND (tmd.minute_date + tmd.minute_time) >= v_current_interval_start
+          AND (tmd.minute_date + tmd.minute_time) <= v_current_interval_start + INTERVAL '14 minutes';
           
         v_interval_pch := ROUND(COALESCE(v_interval_max - v_interval_min, 0), 0);
         v_pch_breach_count := v_pch_breach_count + v_interval_pch;
@@ -280,8 +280,8 @@ BEGIN
             ROUND(COALESCE(AVG((tmd.metrics->>'TMP')::NUMERIC), 0), 2) AS tmp_avg
         FROM public.tblminutedetails tmd
         WHERE tmd.deviceid = p_deviceid
-          AND tmd.created_at >= v_window_start
-          AND tmd.created_at <= v_window_end
+          AND (tmd.minute_date + tmd.minute_time) >= v_window_start
+          AND (tmd.minute_date + tmd.minute_time) <= v_window_end
     ),
     daily_pcd AS (
         SELECT
@@ -290,8 +290,8 @@ BEGIN
             COUNT(*) as pcd_count
         FROM public.tblminutedetails tmd
         WHERE tmd.deviceid = p_deviceid
-          AND tmd.created_at >= date_trunc('day', v_current_time)
-          AND tmd.created_at <= v_window_end
+          AND (tmd.minute_date + tmd.minute_time) >= date_trunc('day', v_current_time)
+          AND (tmd.minute_date + tmd.minute_time) <= v_window_end
     )
 
     SELECT
