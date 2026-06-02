@@ -11,6 +11,7 @@ export default function JsonMonitor() {
     const [fromDate, setFromDate] = useState(todayStr);
     const [toDate, setToDate] = useState(todayStr);
     const [countdown, setCountdown] = useState(60);
+    const [isPaused, setIsPaused] = useState(false);
     const [selectedPayload, setSelectedPayload] = useState<any>(null);
 
     const fetchLogs = useCallback(() => {
@@ -33,6 +34,7 @@ export default function JsonMonitor() {
     }, [fetchLogs]);
 
     useEffect(() => {
+        if (isPaused) return;
         const timer = setInterval(() => {
             setCountdown(prev => {
                 if (prev <= 1) {
@@ -43,7 +45,7 @@ export default function JsonMonitor() {
             });
         }, 1000);
         return () => clearInterval(timer);
-    }, [fetchLogs]);
+    }, [fetchLogs, isPaused]);
 
     const formatTime = (ts: string) => {
         if (!ts) return '—';
@@ -308,13 +310,32 @@ export default function JsonMonitor() {
                         FILTER
                     </button>
                     <div className="h-8 w-px bg-slate-100"></div>
-                    <div className="flex flex-col items-center px-4">
-                        <span className="text-[9px] font-black text-slate-400 uppercase leading-none mb-1">Refresh</span>
-                        <div className="flex items-center gap-1.5 text-indigo-600">
-                            <Activity size={12} className="animate-pulse" />
-                            <span className="text-xs font-black tabular-nums">{countdown}s</span>
+                    <button 
+                        onClick={() => setIsPaused(!isPaused)}
+                        className={`flex flex-col items-center px-4 py-1.5 rounded-xl border transition-all duration-200 select-none cursor-pointer outline-none ${
+                            isPaused 
+                                ? 'bg-slate-50 border-slate-200 text-slate-400 hover:bg-slate-100 hover:text-slate-500' 
+                                : 'bg-indigo-50/20 border-indigo-100/30 text-indigo-600 hover:bg-indigo-50/50'
+                        }`}
+                        title={isPaused ? "Click to resume auto-refresh" : "Click to pause auto-refresh"}
+                    >
+                        <span className="text-[9px] font-black uppercase leading-none mb-1">
+                            {isPaused ? 'Paused' : 'Auto Refresh'}
+                        </span>
+                        <div className="flex items-center gap-1.5 font-black">
+                            {isPaused ? (
+                                <>
+                                    <Clock size={12} />
+                                    <span className="text-xs tabular-nums">{countdown}s</span>
+                                </>
+                            ) : (
+                                <>
+                                    <Activity size={12} className="animate-pulse" />
+                                    <span className="text-xs tabular-nums">{countdown}s</span>
+                                </>
+                            )}
                         </div>
-                    </div>
+                    </button>
                 </div>
             </header>
 
