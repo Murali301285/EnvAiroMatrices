@@ -131,8 +131,8 @@ BEGIN
       AND (tmd.minute_date + tmd.minute_time) >= v_window_start
       AND (tmd.minute_date + tmd.minute_time) <= v_window_end;
     
-    -- Get the previous cycle's MAX value if it exists (for cycle 2, 3, 4 of the calendar hour) to capture inter-cycle transitions
-    IF v_window_start > v_hour_start THEN
+    -- Get the previous cycle's MAX value if it exists (looks up previous cycle, including the 4th cycle of the previous hour for Cycle 1)
+    IF v_window_start > date_trunc('day', v_window_start) THEN
         SELECT MAX((metrics->>'OUT_RAW')::NUMERIC)
         INTO v_prev_interval_max
         FROM public.tblminutedetails tmd
@@ -161,10 +161,21 @@ BEGIN
       AND (tmd.minute_date + tmd.minute_time) >= v_hour_start
       AND (tmd.minute_date + tmd.minute_time) <= v_window_end;
 
-    -- New PCH MAX logic: Sum of individual 15-minute PCH cycles in this calendar hour using previous max
+    -- New PCH MAX logic: Sum of individual 15-minute PCH cycles in this calendar hour using previous max with cross-hour continuity
     v_pch_max_val := 0;
     v_current_interval_start := v_hour_start;
-    v_prev_interval_max := NULL;
+    
+    -- Initialize the previous max value (looks up the last cycle of the previous hour if not at midnight)
+    IF v_hour_start > date_trunc('day', v_window_start) THEN
+        SELECT MAX((metrics->>'OUT_RAW')::NUMERIC)
+        INTO v_prev_interval_max
+        FROM public.tblminutedetails tmd
+        WHERE tmd.deviceid = p_deviceid
+          AND (tmd.minute_date + tmd.minute_time) >= (v_hour_start - INTERVAL '15 minutes')
+          AND (tmd.minute_date + tmd.minute_time) <= (v_hour_start - INTERVAL '1 minute');
+    ELSE
+        v_prev_interval_max := NULL;
+    END IF;
     
     WHILE v_current_interval_start <= v_window_start LOOP
         SELECT 
@@ -234,10 +245,21 @@ BEGIN
       AND (tmd.minute_date + tmd.minute_time) >= v_rolling_start
       AND (tmd.minute_date + tmd.minute_time) <= v_window_end;
 
-    -- New PCH Breach (Rolling) sum logic: Sum of 15-minute PCH cycles inside the dynamic rolling window using previous max
+    -- New PCH Breach (Rolling) sum logic: Sum of 15-minute PCH cycles inside the dynamic rolling window using previous max with continuous transitions
     v_pch_breach_count := 0;
     v_current_interval_start := v_rolling_start;
-    v_prev_interval_max := NULL;
+    
+    -- Initialize the previous max value for rolling window loop (looks up the cycle ending 1 minute before v_rolling_start)
+    IF v_rolling_start > date_trunc('day', v_window_start) THEN
+        SELECT MAX((metrics->>'OUT_RAW')::NUMERIC)
+        INTO v_prev_interval_max
+        FROM public.tblminutedetails tmd
+        WHERE tmd.deviceid = p_deviceid
+          AND (tmd.minute_date + tmd.minute_time) >= (v_rolling_start - INTERVAL '15 minutes')
+          AND (tmd.minute_date + tmd.minute_time) <= (v_rolling_start - INTERVAL '1 minute');
+    ELSE
+        v_prev_interval_max := NULL;
+    END IF;
     
     WHILE v_current_interval_start <= v_window_start LOOP
         SELECT 
