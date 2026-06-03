@@ -134,8 +134,8 @@ BEGIN
     -- Get the previous cycle's MAX value using the last posted pcd_max from history (robust against commit lag)
     IF v_window_start > date_trunc('day', v_window_start) THEN
         SELECT (json_payload->>'pcd_max')::NUMERIC INTO v_prev_interval_max
-        FROM public.tblscheduledjsonhistory
-        WHERE deviceid = p_deviceid 
+        FROM public.tblscheduledjsonhistory tsh
+        WHERE tsh.deviceid = p_deviceid 
           AND payload_type = 'Scheduled'
           AND created_at >= (v_window_start - INTERVAL '20 minutes')
           AND created_at < v_window_start
@@ -179,8 +179,8 @@ BEGIN
     -- Initialize the previous max value (looks up history first to capture cross-hour transitions cleanly)
     IF v_hour_start > date_trunc('day', v_window_start) THEN
         SELECT (json_payload->>'pcd_max')::NUMERIC INTO v_prev_interval_max
-        FROM public.tblscheduledjsonhistory
-        WHERE deviceid = p_deviceid 
+        FROM public.tblscheduledjsonhistory tsh
+        WHERE tsh.deviceid = p_deviceid 
           AND payload_type = 'Scheduled'
           AND created_at >= (v_hour_start - INTERVAL '20 minutes')
           AND created_at < v_hour_start
@@ -274,8 +274,8 @@ BEGIN
     -- Initialize the previous max value for rolling window loop (looks up history first for rolling transitions)
     IF v_rolling_start > date_trunc('day', v_window_start) THEN
         SELECT (json_payload->>'pcd_max')::NUMERIC INTO v_prev_interval_max
-        FROM public.tblscheduledjsonhistory
-        WHERE deviceid = p_deviceid 
+        FROM public.tblscheduledjsonhistory tsh
+        WHERE tsh.deviceid = p_deviceid 
           AND payload_type = 'Scheduled'
           AND created_at >= (v_rolling_start - INTERVAL '20 minutes')
           AND created_at < v_rolling_start
