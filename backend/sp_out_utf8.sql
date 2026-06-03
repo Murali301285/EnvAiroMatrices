@@ -131,15 +131,14 @@ BEGIN
       AND (tmd.minute_date + tmd.minute_time) >= v_window_start
       AND (tmd.minute_date + tmd.minute_time) <= v_window_end;
     
-    -- Get the previous cycle's MAX value using the last posted pcd_max from history (robust against commit lag)
+    -- Get the previous cycle's MAX value using the last posted pcd_max from history (robust against commit lag and backlog schedules)
     IF v_window_start > date_trunc('day', v_window_start) THEN
         SELECT (json_payload->>'pcd_max')::NUMERIC INTO v_prev_interval_max
         FROM public.tblscheduledjsonhistory tsh
         WHERE tsh.deviceid = p_deviceid 
           AND payload_type = 'Scheduled'
-          AND created_at >= (v_window_start - INTERVAL '20 minutes')
-          AND created_at < v_window_start
-        ORDER BY slno DESC LIMIT 1;
+          AND json_payload->>'ist_datetime' = to_char(v_window_start - INTERVAL '1 minute', 'YYYY-MM-DD HH24:MI:SS')
+        LIMIT 1;
         
         -- Fallback to database query if history is not available
         IF v_prev_interval_max IS NULL THEN
@@ -176,15 +175,14 @@ BEGIN
     v_pch_max_val := 0;
     v_current_interval_start := v_hour_start;
     
-    -- Initialize the previous max value (looks up history first to capture cross-hour transitions cleanly)
+    -- Initialize the previous max value (looks up history first to capture cross-hour transitions cleanly and robustly)
     IF v_hour_start > date_trunc('day', v_window_start) THEN
         SELECT (json_payload->>'pcd_max')::NUMERIC INTO v_prev_interval_max
         FROM public.tblscheduledjsonhistory tsh
         WHERE tsh.deviceid = p_deviceid 
           AND payload_type = 'Scheduled'
-          AND created_at >= (v_hour_start - INTERVAL '20 minutes')
-          AND created_at < v_hour_start
-        ORDER BY slno DESC LIMIT 1;
+          AND json_payload->>'ist_datetime' = to_char(v_hour_start - INTERVAL '1 minute', 'YYYY-MM-DD HH24:MI:SS')
+        LIMIT 1;
         
         -- Fallback to database query if history is not available
         IF v_prev_interval_max IS NULL THEN
@@ -271,15 +269,14 @@ BEGIN
     v_pch_breach_count := 0;
     v_current_interval_start := v_rolling_start;
     
-    -- Initialize the previous max value for rolling window loop (looks up history first for rolling transitions)
+    -- Initialize the previous max value for rolling window loop (looks up history first for rolling transitions robustly)
     IF v_rolling_start > date_trunc('day', v_window_start) THEN
         SELECT (json_payload->>'pcd_max')::NUMERIC INTO v_prev_interval_max
         FROM public.tblscheduledjsonhistory tsh
         WHERE tsh.deviceid = p_deviceid 
           AND payload_type = 'Scheduled'
-          AND created_at >= (v_rolling_start - INTERVAL '20 minutes')
-          AND created_at < v_rolling_start
-        ORDER BY slno DESC LIMIT 1;
+          AND json_payload->>'ist_datetime' = to_char(v_rolling_start - INTERVAL '1 minute', 'YYYY-MM-DD HH24:MI:SS')
+        LIMIT 1;
         
         -- Fallback to database query if history is not available
         IF v_prev_interval_max IS NULL THEN
