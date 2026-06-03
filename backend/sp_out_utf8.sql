@@ -68,6 +68,7 @@ DECLARE
     v_pch_cycle_min    NUMERIC;
     v_pch_cycle_max    NUMERIC;
     v_pch_cycle_count  BIGINT;
+    v_pch_cycle_baseline_min NUMERIC;
 
     v_pch_max_val      NUMERIC;
     v_pch_max_min      NUMERIC;
@@ -155,8 +156,10 @@ BEGIN
 
     IF v_prev_interval_max IS NOT NULL AND v_pch_cycle_max IS NOT NULL THEN
         v_pch_cycle_val := ROUND(COALESCE(v_pch_cycle_max - v_prev_interval_max, 0), 0);
+        v_pch_cycle_baseline_min := v_prev_interval_max;
     ELSE
         v_pch_cycle_val := ROUND(COALESCE(v_pch_cycle_max - v_pch_cycle_min, 0), 0);
+        v_pch_cycle_baseline_min := v_pch_cycle_min;
     END IF;
     v_pch_cycle_val := GREATEST(0, v_pch_cycle_val);
       
@@ -426,7 +429,7 @@ BEGIN
         ha.tmp_avg::NUMERIC                                                               AS temp,
         COALESCE((SELECT unit FROM tblParameterMaster WHERE param_tag='TMP' LIMIT 1), '')::VARCHAR AS temp_unit,
         -- DIAGNOSTIC OUTPUTS
-        COALESCE(v_pch_cycle_min, 0)::NUMERIC,
+        COALESCE(v_pch_cycle_baseline_min, 0)::NUMERIC,
         COALESCE(v_pch_cycle_max, 0)::NUMERIC,
         v_window_start::TIMESTAMP,
         v_window_end::TIMESTAMP,
