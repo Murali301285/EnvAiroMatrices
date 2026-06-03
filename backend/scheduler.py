@@ -851,9 +851,9 @@ def dispatch_pch_alerts_job():
 
 def start_schedulers():
     scheduler = BackgroundScheduler()
-    # Shifted by 5 minutes to provide Lookback Buffer for data sync
-    scheduler.add_job(orchestrate_json_payloads, 'cron', minute='5,20,35,50')
-    scheduler.add_job(evaluate_active_alerts, 'cron', minute='5,20,35,50')
+    # Shifted by 2 minutes to provide Lookback Buffer for data sync
+    scheduler.add_job(orchestrate_json_payloads, 'cron', minute='2,17,32,47')
+    scheduler.add_job(evaluate_active_alerts, 'cron', minute='2,17,32,47')
     
     scheduler.add_job(dispatch_pch_alerts_job, 'interval', minutes=1)
     scheduler.add_job(process_dlq, 'interval', minutes=2)
