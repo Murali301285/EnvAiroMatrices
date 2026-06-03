@@ -131,14 +131,25 @@ BEGIN
       AND (tmd.minute_date + tmd.minute_time) >= v_window_start
       AND (tmd.minute_date + tmd.minute_time) <= v_window_end;
     
-    -- Get the previous cycle's MAX value if it exists (looks up previous cycle, including the 4th cycle of the previous hour for Cycle 1)
+    -- Get the previous cycle's MAX value using the last posted pcd_max from history (robust against commit lag)
     IF v_window_start > date_trunc('day', v_window_start) THEN
-        SELECT MAX((metrics->>'OUT_RAW')::NUMERIC)
-        INTO v_prev_interval_max
-        FROM public.tblminutedetails tmd
-        WHERE tmd.deviceid = p_deviceid
-          AND (tmd.minute_date + tmd.minute_time) >= (v_window_start - INTERVAL '15 minutes')
-          AND (tmd.minute_date + tmd.minute_time) <= (v_window_start - INTERVAL '1 minute');
+        SELECT (json_payload->>'pcd_max')::NUMERIC INTO v_prev_interval_max
+        FROM public.tblscheduledjsonhistory
+        WHERE deviceid = p_deviceid 
+          AND payload_type = 'Scheduled'
+          AND created_at >= (v_window_start - INTERVAL '20 minutes')
+          AND created_at < v_window_start
+        ORDER BY slno DESC LIMIT 1;
+        
+        -- Fallback to database query if history is not available
+        IF v_prev_interval_max IS NULL THEN
+            SELECT MAX((metrics->>'OUT_RAW')::NUMERIC)
+            INTO v_prev_interval_max
+            FROM public.tblminutedetails tmd
+            WHERE tmd.deviceid = p_deviceid
+              AND (tmd.minute_date + tmd.minute_time) >= (v_window_start - INTERVAL '15 minutes')
+              AND (tmd.minute_date + tmd.minute_time) <= (v_window_start - INTERVAL '1 minute');
+        END IF;
     ELSE
         v_prev_interval_max := NULL;
     END IF;
@@ -165,14 +176,25 @@ BEGIN
     v_pch_max_val := 0;
     v_current_interval_start := v_hour_start;
     
-    -- Initialize the previous max value (looks up the last cycle of the previous hour if not at midnight)
+    -- Initialize the previous max value (looks up history first to capture cross-hour transitions cleanly)
     IF v_hour_start > date_trunc('day', v_window_start) THEN
-        SELECT MAX((metrics->>'OUT_RAW')::NUMERIC)
-        INTO v_prev_interval_max
-        FROM public.tblminutedetails tmd
-        WHERE tmd.deviceid = p_deviceid
-          AND (tmd.minute_date + tmd.minute_time) >= (v_hour_start - INTERVAL '15 minutes')
-          AND (tmd.minute_date + tmd.minute_time) <= (v_hour_start - INTERVAL '1 minute');
+        SELECT (json_payload->>'pcd_max')::NUMERIC INTO v_prev_interval_max
+        FROM public.tblscheduledjsonhistory
+        WHERE deviceid = p_deviceid 
+          AND payload_type = 'Scheduled'
+          AND created_at >= (v_hour_start - INTERVAL '20 minutes')
+          AND created_at < v_hour_start
+        ORDER BY slno DESC LIMIT 1;
+        
+        -- Fallback to database query if history is not available
+        IF v_prev_interval_max IS NULL THEN
+            SELECT MAX((metrics->>'OUT_RAW')::NUMERIC)
+            INTO v_prev_interval_max
+            FROM public.tblminutedetails tmd
+            WHERE tmd.deviceid = p_deviceid
+              AND (tmd.minute_date + tmd.minute_time) >= (v_hour_start - INTERVAL '15 minutes')
+              AND (tmd.minute_date + tmd.minute_time) <= (v_hour_start - INTERVAL '1 minute');
+        END IF;
     ELSE
         v_prev_interval_max := NULL;
     END IF;
@@ -249,14 +271,25 @@ BEGIN
     v_pch_breach_count := 0;
     v_current_interval_start := v_rolling_start;
     
-    -- Initialize the previous max value for rolling window loop (looks up the cycle ending 1 minute before v_rolling_start)
+    -- Initialize the previous max value for rolling window loop (looks up history first for rolling transitions)
     IF v_rolling_start > date_trunc('day', v_window_start) THEN
-        SELECT MAX((metrics->>'OUT_RAW')::NUMERIC)
-        INTO v_prev_interval_max
-        FROM public.tblminutedetails tmd
-        WHERE tmd.deviceid = p_deviceid
-          AND (tmd.minute_date + tmd.minute_time) >= (v_rolling_start - INTERVAL '15 minutes')
-          AND (tmd.minute_date + tmd.minute_time) <= (v_rolling_start - INTERVAL '1 minute');
+        SELECT (json_payload->>'pcd_max')::NUMERIC INTO v_prev_interval_max
+        FROM public.tblscheduledjsonhistory
+        WHERE deviceid = p_deviceid 
+          AND payload_type = 'Scheduled'
+          AND created_at >= (v_rolling_start - INTERVAL '20 minutes')
+          AND created_at < v_rolling_start
+        ORDER BY slno DESC LIMIT 1;
+        
+        -- Fallback to database query if history is not available
+        IF v_prev_interval_max IS NULL THEN
+            SELECT MAX((metrics->>'OUT_RAW')::NUMERIC)
+            INTO v_prev_interval_max
+            FROM public.tblminutedetails tmd
+            WHERE tmd.deviceid = p_deviceid
+              AND (tmd.minute_date + tmd.minute_time) >= (v_rolling_start - INTERVAL '15 minutes')
+              AND (tmd.minute_date + tmd.minute_time) <= (v_rolling_start - INTERVAL '1 minute');
+        END IF;
     ELSE
         v_prev_interval_max := NULL;
     END IF;

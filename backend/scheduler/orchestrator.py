@@ -44,9 +44,9 @@ def orchestrate_json_payloads():
             orchestrated_buckets = set()
             processed_slnos = []
 
-            # 2-minute Lookback Buffer: Only process records that arrived at least 2 mins ago
+            # 5-minute Lookback Buffer: Only process records that arrived at least 5 mins ago
             # This ensures the 15-min bucket is fully 'closed' before we transmit.
-            cutoff = datetime.datetime.now() - datetime.timedelta(minutes=2)
+            cutoff = datetime.datetime.now() - datetime.timedelta(minutes=5)
             
             for row in unprocessed:
                 slno = row["slno"]
